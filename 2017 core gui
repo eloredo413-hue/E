@@ -1,0 +1,2443 @@
+--[[
+		___ _______ ________ ________ ________ ___ ___
+		|\ \ |\ ___ \ |\ ____\|\ __ \|\ ____\ |\ \ / /|
+		\ \ \ \ \ __/|\ \ \___|\ \ \|\ \ \ \___| \ \ \/ / /
+		\ \ \ \ \ \_|/_\ \ \ __\ \ __ \ \ \ \ \ / /
+		 \ \ \____\ \ \_|\ \ \ \|\ \ \ \ \ \ \ \____ \/ / /
+		  \ \_______\ \_______\ \_______\ \__\ \__\ \_______\__/ / /
+		   \|_______|\|_______|\|_______|\|__|\|__|\|_______|\____/ /
+
+		> github.com/yeku/legacy
+
+		>> a ROBLOX coregui changer that lets you use older designs
+
+		[!] only supports 2012, 2013, 2014, 2015, 2016
+		]]
+
+if (not game:IsLoaded()) then
+
+	game.Loaded:Wait()
+
+end
+
+-- Settings
+
+local Developer = (isfile and (isfile("yeku.txt") and isfile("Legacy.rbxm")))
+
+local Environment = (getgenv or function() return _G end)
+
+local Settings = Environment().LegacySettings or ({
+	Year = 2017,
+
+	OldGraphics = true,
+
+	HideDisplayName = true,
+
+	SafeChat = true,
+
+	OldConsole = true,
+
+	OldBubbleChat = true,
+})
+
+-- Services
+
+local Players = game:GetService("Players")
+
+local CoreGui = game:GetService("CoreGui")
+
+local StarterGui = game:GetService("StarterGui")
+
+local Lighting = game:GetService("Lighting")
+
+local TextChatService = game:GetService("TextChatService")
+
+local UserInputService = game:GetService("UserInputService")
+
+local MarketplaceService = game:GetService("MarketplaceService")
+
+local RunService = game:GetService("RunService")
+
+local TweenService = game:GetService("TweenService")
+
+-- Variables
+
+local RobloxGui = CoreGui:WaitForChild("RobloxGui")
+
+local ExperienceChat = CoreGui:WaitForChild("ExperienceChat")
+
+local ChatBubbles = ExperienceChat:WaitForChild("bubbleChat")
+
+local IsTouchDevice = UserInputService.TouchEnabled
+
+-- Types
+
+export type Properties = { [string]: any }
+
+-- Functions
+
+local Force = function(Object: Instance, Property: string, Value: any)
+
+	if not Object then
+		return
+	end
+
+	if (Object[Property] ~= Value) then
+		Object[Property] = Value
+	end
+
+	Object:GetPropertyChangedSignal(Property):Connect(function()
+
+		if (Object[Property] ~= Value) then
+			Object[Property] = Value
+		end
+
+	end)
+
+end
+
+local Set = function(Object: Instance, Properties: Properties, Forced: boolean)
+
+	if (not Object) then
+		return
+	end
+
+	for Property, Value in next, Properties do
+
+		local Success, Result = pcall(function()
+
+			Object[Property] = Value
+
+			if (Forced) then
+				Force(Object, Property, Value)
+			end
+
+		end)
+
+		if (not Success) then
+			warn(`{Result} | {debug.traceback()}`)
+		end
+
+	end
+
+end
+
+local Create = function(ClassName: string, Properties: Properties, Forced: boolean, Parent: Instance?)
+
+	local Object = Instance.new(ClassName)
+
+	if (Parent) then
+		Object.Parent = Parent
+	end
+
+	Set(Object, Properties, Forced)
+
+	return Object
+
+end
+
+local Run = function(Bool: boolean, Callback: () -> ())
+
+	if (Bool) then
+		task.spawn(Callback)
+	end
+
+end
+
+ExperienceChat.Enabled = false
+
+-- Module
+
+local Suite = Environment().Suite or loadstring(game:HttpGet(
+	"https://raw.githubusercontent.com/yeku/forks/refs/heads/main/Scripts/RBXMSuite.luau"
+))()
+
+--============================================================*
+-- CLASSIC ROBLOX LOADING GUI
+-- 2017+ ONLY
+--============================================================*
+
+if Settings.Year >= 2017 then
+
+	task.spawn(function()
+
+		--====================================================*
+		-- LOAD ROBLOXLOADINGGUI
+		--====================================================*
+
+		local Project
+
+		local Success, Result =
+			pcall(function()
+
+				return Suite.launch(
+					"rbxassetid://129525824550169",
+					{
+						runscripts = false,
+						deferred = true,
+						nocache = false,
+						nocirculardeps = true,
+						debug = false,
+						verbose = false,
+					}
+				)
+
+			end)
+
+		if Success then
+			Project = Result
+		else
+
+			warn(
+				"Classic Loading GUI: failed to load RBXM:",
+				Result
+			)
+
+			return
+
+		end
+
+		--====================================================*
+		-- FIND IMPORTED GUI
+		--====================================================*
+
+		local LoadingScreen
+
+		if typeof(Project) == "Instance" then
+
+			if Project:IsA("ScreenGui") then
+
+				LoadingScreen = Project
+
+			else
+
+				LoadingScreen =
+					Project:FindFirstChild(
+						"RobloxLoadingGui",
+						true
+					)
+
+			end
+
+		end
+
+		--====================================================*
+		-- FALLBACK SEARCH
+		--====================================================*
+
+		if not LoadingScreen then
+
+			LoadingScreen =
+				CoreGui:FindFirstChild(
+					"RobloxLoadingGui",
+					true
+				)
+
+		end
+
+		--====================================================*
+		-- WAIT FOR RBXM-SUITE IMPORT
+		--====================================================*
+
+		if not LoadingScreen then
+
+			local StartTime =
+				os.clock()
+
+			while
+				not LoadingScreen
+				and os.clock() - StartTime < 10
+			do
+
+				LoadingScreen =
+					CoreGui:FindFirstChild(
+						"RobloxLoadingGui",
+						true
+					)
+
+				task.wait()
+
+			end
+
+		end
+
+		--====================================================*
+		-- SAFETY CHECK
+		--====================================================*
+
+		if not LoadingScreen then
+
+			warn(
+				"Classic Loading GUI: RobloxLoadingGui could not be found."
+			)
+
+			return
+
+		end
+
+		--====================================================*
+		-- MOVE INTO COREGUI
+		--====================================================*
+
+		if LoadingScreen.Parent ~= CoreGui then
+			LoadingScreen.Parent = CoreGui
+		end
+
+		--====================================================*
+		-- DISPLAY SETTINGS
+		--====================================================*
+
+		pcall(function()
+			LoadingScreen.DisplayOrder = 2147483647
+		end)
+
+		pcall(function()
+			LoadingScreen.IgnoreGuiInset = true
+		end)
+
+		pcall(function()
+			LoadingScreen.ResetOnSpawn = false
+		end)
+
+		--====================================================*
+		-- GUI HIERARCHY
+		--====================================================*
+		--
+		-- RobloxLoadingGui
+		-- â””â”€ BlackFrame
+		--    â”œâ”€ GraphicsFrame
+		--    â”‚  â””â”€ LoadingImage
+		--    â”‚
+		--    â””â”€ InfoFrame
+		--       â”œâ”€ UiMessageFrame
+		--       â”‚  â””â”€ UiMessage
+		--       â”œâ”€ CreatorLabel
+		--       â”œâ”€ PlaceLabel
+		--       â””â”€ PlaceIcon
+		--
+		--====================================================*
+
+		local BlackFrame =
+			LoadingScreen:WaitForChild(
+				"BlackFrame"
+			)
+
+		local GraphicsFrame =
+			BlackFrame:WaitForChild(
+				"GraphicsFrame"
+			)
+
+		local LoadingImage =
+			GraphicsFrame:WaitForChild(
+				"LoadingImage"
+			)
+
+		-- Use the 2017â€“2022 tilted Roblox icon
+		LoadingImage.Image =
+			"rbxthumb://type=Asset&id=84036832993951&w=150&h=150"
+
+		local InfoFrame =
+			BlackFrame:WaitForChild(
+				"InfoFrame"
+			)
+
+		local UiMessageFrame =
+			InfoFrame:WaitForChild(
+				"UiMessageFrame"
+			)
+
+		local UiMessage =
+			UiMessageFrame:WaitForChild(
+				"UiMessage"
+			)
+
+		local CreatorLabel =
+			InfoFrame:WaitForChild(
+				"CreatorLabel"
+			)
+
+		local PlaceLabel =
+			InfoFrame:WaitForChild(
+				"PlaceLabel"
+			)
+
+		local PlaceIcon =
+			InfoFrame:WaitForChild(
+				"PlaceIcon"
+			)
+
+		--====================================================*
+		-- GAME INFORMATION
+		--====================================================*
+
+		local SuccessInfo, GameInfo =
+			pcall(
+				function()
+
+					return MarketplaceService:GetProductInfo(
+						game.PlaceId
+					)
+
+				end
+			)
+
+		if SuccessInfo and GameInfo then
+
+			--================================================*
+			-- GAME TITLE
+			--================================================*
+
+			if
+				GameInfo.Name
+				and GameInfo.Name ~= ""
+			then
+
+				PlaceLabel.Text =
+					GameInfo.Name
+
+			else
+
+				PlaceLabel.Text =
+					game.Name
+
+			end
+
+			--================================================*
+			-- CREATOR
+			--================================================*
+
+			if
+				GameInfo.Creator
+				and GameInfo.Creator.Name
+			then
+
+				CreatorLabel.Text =
+					"By " .. GameInfo.Creator.Name
+
+			else
+
+				CreatorLabel.Text =
+					""
+
+			end
+
+		else
+
+			PlaceLabel.Text =
+				game.Name
+
+			CreatorLabel.Text =
+				""
+
+		end
+
+		--====================================================*
+		-- LOADING MESSAGE
+		--====================================================*
+
+		UiMessage.Text =
+			"Joining Server"
+
+		--====================================================*
+		-- GAME THUMBNAIL
+		--====================================================*
+
+		local PlaceId = game.PlaceId
+
+		if PlaceId and PlaceId ~= 0 then
+
+			PlaceIcon.Image =
+				"rbxthumb://type=GameThumbnail&id="
+				.. PlaceId
+				.. "&w=768&h=432"
+
+		end
+
+		--====================================================*
+		-- ORIGINAL THUMBNAIL ASPECT RATIO
+		--====================================================*
+
+		local AspectConstraint =
+			PlaceIcon:FindFirstChildOfClass(
+				"UIAspectRatioConstraint"
+			)
+
+		if AspectConstraint then
+
+			AspectConstraint.AspectRatio =
+				1.778
+
+			AspectConstraint.AspectType =
+				Enum.AspectType.ScaleWithParentSize
+
+			AspectConstraint.DominantAxis =
+				Enum.DominantAxis.Width
+
+		end
+
+		--====================================================*
+		-- ORIGINAL ROBLOX SPINNER
+		--====================================================*
+
+		local function spinnerEasingFunc(
+			a,
+			b,
+			t
+		)
+
+			t = t * 2
+
+			if t < 1 then
+
+				return
+					b / 2
+					* t
+					* t
+					* t
+					+ a
+
+			else
+
+				t = t - 2
+
+				return
+					b / 2
+					* (
+						t
+						* t
+						* t
+						+ 2
+					)
+					+ b
+
+			end
+
+		end
+
+		--====================================================*
+		-- START SPINNER IMMEDIATELY
+		--====================================================*
+
+		local TURN_CYCLE_TIME =
+			2
+
+		local SpinnerConnection
+
+		SpinnerConnection =
+			RunService.RenderStepped:Connect(
+				function()
+
+					if
+						not LoadingImage
+						or not LoadingImage.Parent
+					then
+
+						if SpinnerConnection then
+
+							SpinnerConnection:Disconnect()
+							SpinnerConnection = nil
+
+						end
+
+						return
+
+					end
+
+					local CurrentTime =
+						tick()
+
+					local TimeInCycle =
+						CurrentTime
+						% TURN_CYCLE_TIME
+
+					local CycleAlpha =
+						spinnerEasingFunc(
+							0,
+							1,
+							TimeInCycle
+							/ TURN_CYCLE_TIME
+						)
+
+					LoadingImage.Rotation =
+						CycleAlpha * 360
+
+				end
+			)
+
+		--====================================================*
+		-- KEEP LOADING SCREEN FOR 5 SECONDS
+		--====================================================*
+
+		task.wait(5)
+
+		--====================================================*
+		-- STOP SPINNER
+		--====================================================*
+
+		if SpinnerConnection then
+
+			SpinnerConnection:Disconnect()
+			SpinnerConnection = nil
+
+		end
+
+		--====================================================*
+		-- FADE OUT
+		--====================================================*
+
+		local FadeTime =
+			0.5
+
+		local FadeInfo =
+			TweenInfo.new(
+				FadeTime,
+				Enum.EasingStyle.Quad,
+				Enum.EasingDirection.Out
+			)
+
+		for _, Object in ipairs(
+			LoadingScreen:GetDescendants()
+		) do
+
+			--================================================*
+			-- TEXT
+			--================================================*
+
+			if
+				Object:IsA("TextLabel")
+				or Object:IsA("TextButton")
+			then
+
+				pcall(function()
+
+					TweenService:Create(
+						Object,
+						FadeInfo,
+						{
+							TextTransparency = 1,
+							TextStrokeTransparency = 1
+						}
+					):Play()
+
+				end)
+
+			--================================================*
+			-- IMAGES
+			--================================================*
+
+			elseif
+				Object:IsA("ImageLabel")
+				or Object:IsA("ImageButton")
+			then
+
+				pcall(function()
+
+					TweenService:Create(
+						Object,
+						FadeInfo,
+						{
+							ImageTransparency = 1
+						}
+					):Play()
+
+				end)
+
+			--================================================*
+			-- FRAMES
+			--================================================*
+
+			elseif Object:IsA("Frame") then
+
+				pcall(function()
+
+					TweenService:Create(
+						Object,
+						FadeInfo,
+						{
+							BackgroundTransparency = 1
+						}
+					):Play()
+
+				end)
+
+			end
+
+		end
+
+		--====================================================*
+		-- WAIT FOR FADE
+		--====================================================*
+
+		task.wait(FadeTime)
+
+		--====================================================*
+		-- REMOVE GUI
+		--====================================================*
+
+		if LoadingScreen then
+
+			pcall(function()
+				LoadingScreen:Destroy()
+			end)
+
+		end
+
+	end)
+
+end
+
+-- Module / Legacy
+
+local Legacy = (function()
+
+	local Path do
+
+		if (Developer) then
+
+			StarterGui:SetCore("SendNotification", {
+				Title = "Legacy",
+				Text = "Running the developer build",
+				Duration = 5
+			})
+
+			Path = "Legacy.rbxm"
+
+		else
+
+			local RBXM = Suite.download(
+				"letsafe/something@v1.0.0",
+				"Legacy2017.rbxm"
+			)
+
+			Path = RBXM
+
+		end
+
+	end
+
+	return Suite.launch(
+		Path,
+		{
+			runscripts = true,
+			debug = true,
+			verbose = true
+		}
+	)
+
+end)()
+
+-- Setup
+
+local LegacyGui =
+	Suite.require(Legacy):Start(
+		Settings.Year,
+		Settings.SafeChat
+	)
+
+RobloxGui.Enabled = false
+
+-- MOBILE FIX:
+-- NotificationFrame does not have to exist on every client.
+-- Do not crash if the current client does not create it.
+
+local NotificationFrame =
+	RobloxGui:FindFirstChild("NotificationFrame")
+
+if NotificationFrame then
+	NotificationFrame.Parent = LegacyGui
+end
+
+Run(Settings.OldConsole == true, function()
+
+	loadstring(game:HttpGet(
+		"https://raw.githubusercontent.com/yeku/forks/refs/heads/main/Scripts/LegacyConsole.luau"
+	))()
+
+end)
+
+Run(Settings.OldGraphics == true, function()
+
+	if (sethiddenproperty) then
+
+		task.spawn(
+			sethiddenproperty,
+			Lighting,
+			"Technology",
+			Enum.Technology.Compatibility
+		)
+
+	end
+
+	for _, Hidden in next, Lighting:QueryDescendants(
+		"> DepthOfFieldEffect, > SunRaysEffect, > BloomEffect, > BlurEffect, > ColorCorrectionEffect, > Atmosphere"
+	) do
+
+		if (Hidden:IsA("Atmosphere")) then
+
+			Hidden:Destroy()
+
+		else
+
+			Force(
+				Hidden,
+				"Enabled",
+				false
+			)
+
+		end
+
+	end
+
+	Create(
+		"ColorGradingEffect",
+		{
+			TonemapperPreset =
+				Enum.TonemapperPreset.Retro
+		}
+	)
+
+	Create(
+		"ColorCorrectionEffect",
+		{
+			Saturation = 0,
+
+			Contrast = -0.1,
+
+			Parent = Lighting,
+		}
+	)
+
+end)
+
+Run(Settings.OldBubbleChat == true, function()
+
+	--============================================================*
+	-- LEGACY BUBBLE CHAT
+	-- Based on the old Roblox BubbleChat renderer.
+	-- Creates the bubbles ourselves instead of modifying
+	-- modern ExperienceChat bubble instances.
+	--============================================================*
+
+	local TextService = game:GetService("TextService")
+	local Debris = game:GetService("Debris")
+
+	local LocalPlayer = Players.LocalPlayer
+	local Camera = workspace.CurrentCamera
+
+	--============================================================*
+	-- DISABLE MODERN BUBBLE CHAT
+	--============================================================*
+
+	pcall(function()
+		ExperienceChat.Enabled = false
+	end)
+
+	pcall(function()
+		TextChatService.BubbleChatConfiguration.Enabled = false
+	end)
+
+	--============================================================*
+	-- SETTINGS
+	--============================================================*
+
+	local MAX_BUBBLE_WIDTH = 400
+	local MAX_TOTAL_BUBBLE_HEIGHT = 150
+
+	local NEAR_BUBBLE_DISTANCE = 45
+	local MAX_BUBBLE_DISTANCE = 80
+
+	local MIN_BUBBLE_LIFETIME = 12
+	local MAX_BUBBLE_LIFETIME = 20
+
+	local MIN_BUBBLE_LIFETIME_SELF = 8
+	local MAX_BUBBLE_LIFETIME_SELF = 15
+
+	local BUBBLE_FADE_TIME = 1.5
+
+	local MAX_CHAT_MESSAGE_LENGTH = 128
+
+	local ELLIPSES = "..."
+
+	local MAX_CHAT_MESSAGE_LENGTH_EXCLUSIVE =
+		MAX_CHAT_MESSAGE_LENGTH
+		- #ELLIPSES
+		- 1
+
+	local BubbleFont =
+		Font.fromEnum(
+			Enum.Font.SourceSans
+		)
+
+	local BubbleBackground =
+		Color3.fromRGB(
+			255,
+			255,
+			255
+		)
+
+	local BubbleTextColor =
+		Color3.fromRGB(
+			60,
+			68,
+			75
+		)
+
+	local BubbleTextSize = 22
+
+	--============================================================*
+	-- TWEEN INFO
+	--============================================================*
+
+	local ResizeBubbleTweenInfo =
+		TweenInfo.new(
+			0.1,
+			Enum.EasingStyle.Back,
+			Enum.EasingDirection.Out
+		)
+
+	local ShiftBubblesUpTweenInfo =
+		TweenInfo.new(
+			0.07,
+			Enum.EasingStyle.Sine,
+			Enum.EasingDirection.Out
+		)
+
+	--============================================================*
+	-- QUEUES
+	--============================================================*
+
+	local ChatBubbleQueues = {}
+
+	-- Most recent bubble is [1].
+	-- Oldest bubble is at the end.
+
+	--============================================================*
+	-- MESSAGE LENGTH
+	--============================================================*
+
+	local function getMessageLength(Message)
+
+		local Success, Length =
+			pcall(
+				function()
+
+					return
+						utf8.len(
+							utf8.nfcnormalize(
+								Message
+							)
+						)
+
+				end
+			)
+
+		if Success and Length then
+			return Length
+		end
+
+		return #Message
+
+	end
+
+	--============================================================*
+	-- SANITIZE MESSAGE
+	--============================================================*
+
+	local function sanitizeChatLine(Message)
+
+		local Length =
+			getMessageLength(
+				Message
+			)
+
+		if
+			Length
+			<= MAX_CHAT_MESSAGE_LENGTH_EXCLUSIVE
+		then
+
+			return Message
+
+		end
+
+		local ByteOffset
+
+		pcall(function()
+
+			ByteOffset =
+				utf8.offset(
+					Message,
+					MAX_CHAT_MESSAGE_LENGTH_EXCLUSIVE
+					+ getMessageLength(
+						ELLIPSES
+					)
+					+ 1
+				)
+
+		end)
+
+		if not ByteOffset then
+			return string.sub(
+				Message,
+				1,
+				MAX_CHAT_MESSAGE_LENGTH_EXCLUSIVE
+			)
+		end
+
+		return
+			string.sub(
+				Message,
+				1,
+				ByteOffset - 1
+			)
+
+	end
+
+	--============================================================*
+	-- LIFETIME
+	--============================================================*
+
+	local function lerpLength(
+		Message,
+		Minimum,
+		Maximum
+	)
+
+		local Alpha =
+			math.min(
+				getMessageLength(
+					Message
+				) / 75,
+				1
+			)
+
+		return
+			Minimum
+			+ (
+				Maximum - Minimum
+			)
+			* Alpha
+
+	end
+
+	--============================================================*
+	-- REMOVE SPECIFIC BUBBLE
+	--============================================================*
+
+	local function removeBubbleFromQueue(
+		Adornee,
+		Bubble
+	)
+
+		local Queue =
+			ChatBubbleQueues[
+				Adornee
+			]
+
+		if not Queue then
+			return
+		end
+
+		for Index, Value in ipairs(Queue) do
+
+			if Value == Bubble then
+
+				table.remove(
+					Queue,
+					Index
+				)
+
+				break
+
+			end
+
+		end
+
+		if #Queue == 0 then
+
+			ChatBubbleQueues[
+				Adornee
+			] = nil
+
+		end
+
+	end
+
+	--============================================================*
+	-- REMOVE OLDEST
+	--============================================================*
+
+	local function removeOldestFromQueue(
+		Adornee
+	)
+
+		local Queue =
+			ChatBubbleQueues[
+				Adornee
+			]
+
+		if not Queue then
+			return
+		end
+
+		local OldestBubble =
+			Queue[#Queue]
+
+		if not OldestBubble then
+			return
+		end
+
+		table.remove(
+			Queue,
+			#Queue
+		)
+
+		if OldestBubble.Parent then
+
+			OldestBubble:Destroy()
+
+		end
+
+	end
+
+	--============================================================*
+	-- ADD TO QUEUE
+	--============================================================*
+
+	local function addBubbleToQueue(
+		Adornee,
+		ChatBubbleGui,
+		Lifetime
+	)
+
+		local Queue =
+			ChatBubbleQueues[
+				Adornee
+			]
+
+		if not Queue then
+
+			Queue = {}
+
+			ChatBubbleQueues[
+				Adornee
+			] = Queue
+
+			Adornee.Destroying:Connect(
+				function()
+
+					ChatBubbleQueues[
+						Adornee
+					] = nil
+
+				end
+			)
+
+		end
+
+		local Gap = 4
+
+		local ChatBubble =
+			ChatBubbleGui
+				:FindFirstChild(
+					"BillboardFrame"
+				)
+				and ChatBubbleGui
+					.BillboardFrame
+					:FindFirstChild(
+						"ChatBubble"
+					)
+
+		local NewBubbleHeight = 0
+
+		if ChatBubble then
+
+			NewBubbleHeight =
+				ChatBubble.AbsoluteSize.Y
+
+			if NewBubbleHeight <= 0 then
+
+				NewBubbleHeight =
+					ChatBubble.Size.Y.Offset
+
+			end
+
+		end
+
+		local TotalYSpaceUsed =
+			NewBubbleHeight
+
+		--====================================================*
+		-- SHIFT EXISTING BUBBLES UP
+		--====================================================*
+
+		for _, Bubble in ipairs(Queue) do
+
+			if not Bubble.Parent then
+				continue
+			end
+
+			local BillboardFrame =
+				Bubble:FindFirstChild(
+					"BillboardFrame"
+				)
+
+			if not BillboardFrame then
+				continue
+			end
+
+			local ExistingBubble =
+				BillboardFrame:FindFirstChild(
+					"ChatBubble"
+				)
+
+			if not ExistingBubble then
+				continue
+			end
+
+			local ShiftUp =
+				NewBubbleHeight
+				+ Gap
+
+			local NewPosition =
+				BillboardFrame.Position
+				- UDim2.fromOffset(
+					0,
+					ShiftUp
+				)
+
+			TweenService:Create(
+				BillboardFrame,
+				ShiftBubblesUpTweenInfo,
+				{
+					Position =
+						NewPosition
+				}
+			):Play()
+
+			TotalYSpaceUsed +=
+				ExistingBubble.AbsoluteSize.Y
+
+			local ExistingText =
+				ExistingBubble:FindFirstChild(
+					"BubbleText"
+				)
+
+			if ExistingText then
+
+				ExistingText.TextTransparency =
+					0.5
+
+			end
+
+		end
+
+		--====================================================*
+		-- REMOVE OLDEST WHEN TOO TALL
+		--====================================================*
+
+		if
+			TotalYSpaceUsed
+			> MAX_TOTAL_BUBBLE_HEIGHT
+		then
+
+			removeOldestFromQueue(
+				Adornee
+			)
+
+		end
+
+		table.insert(
+			Queue,
+			1,
+			ChatBubbleGui
+		)
+
+		--====================================================*
+		-- REMOVE THIS BUBBLE AFTER ITS LIFETIME
+		--====================================================*
+
+		task.delay(
+			Lifetime
+			+ BUBBLE_FADE_TIME,
+			function()
+
+				if ChatBubbleGui.Parent then
+
+					removeBubbleFromQueue(
+						Adornee,
+						ChatBubbleGui
+					)
+
+				end
+
+			end
+		)
+
+	end
+
+	--============================================================*
+	-- CREATE BUBBLE
+	--============================================================*
+
+	local function createBubble(
+		Adornee,
+		Message,
+		SentBySelf
+	)
+
+		if
+			not Adornee
+			or not Adornee.Parent
+		then
+
+			return
+
+		end
+
+		Message =
+			sanitizeChatLine(
+				Message
+			)
+
+		--====================================================*
+		-- BILLBOARD GUI
+		--====================================================*
+
+		local ChatBubbleGui =
+			Instance.new(
+				"BillboardGui"
+			)
+
+		ChatBubbleGui.Name =
+			"ChatBubbleGui"
+
+		ChatBubbleGui.Size =
+			UDim2.fromOffset(
+				400,
+				250
+			)
+
+		ChatBubbleGui.Adornee =
+			Adornee
+
+		pcall(function()
+			ChatBubbleGui.MaxDistance =
+				MAX_BUBBLE_DISTANCE
+		end)
+
+		--====================================================*
+		-- BILLBOARD FRAME
+		--====================================================*
+
+		local BillboardFrame =
+			Instance.new(
+				"Frame"
+			)
+
+		BillboardFrame.Name =
+			"BillboardFrame"
+
+		BillboardFrame.AnchorPoint =
+			Vector2.new(
+				0.5,
+				0
+			)
+
+		BillboardFrame.BackgroundTransparency =
+			1
+
+		BillboardFrame.Position =
+			UDim2.fromScale(
+				0.5,
+				-0.5
+			)
+
+		BillboardFrame.Size =
+			UDim2.fromScale(
+				1,
+				1
+			)
+
+		BillboardFrame.Parent =
+			ChatBubbleGui
+
+		--====================================================*
+		-- SMALL TALK BUBBLE
+		--====================================================*
+
+		local SmallTalkBubble =
+			Instance.new(
+				"ImageLabel"
+			)
+
+		SmallTalkBubble.Name =
+			"SmallTalkBubble"
+
+		SmallTalkBubble.AnchorPoint =
+			Vector2.new(
+				0.5,
+				1
+			)
+
+		SmallTalkBubble.BackgroundTransparency =
+			1
+
+		SmallTalkBubble.BorderSizePixel =
+			0
+
+		SmallTalkBubble.Image =
+			"rbxasset://textures/ui/dialog_white.png"
+
+		SmallTalkBubble.ImageColor3 =
+			BubbleBackground
+
+		SmallTalkBubble.Position =
+			UDim2.fromScale(
+				0.5,
+				1
+			)
+
+		SmallTalkBubble.ScaleType =
+			Enum.ScaleType.Slice
+
+		SmallTalkBubble.Size =
+			UDim2.fromOffset(
+				40,
+				30
+			)
+
+		SmallTalkBubble.SliceCenter =
+			Rect.new(
+				5,
+				5,
+				15,
+				15
+			)
+
+		SmallTalkBubble.Visible =
+			false
+
+		SmallTalkBubble.Parent =
+			BillboardFrame
+
+		--====================================================*
+		-- SMALL TALK TEXT
+		--====================================================*
+
+		local SmallTalkBubbleText =
+			Instance.new(
+				"TextLabel"
+			)
+
+		SmallTalkBubbleText.Name =
+			"BubbleText"
+
+		SmallTalkBubbleText.BackgroundTransparency =
+			1
+
+		SmallTalkBubbleText.ClipsDescendants =
+			true
+
+		SmallTalkBubbleText.FontFace =
+			BubbleFont
+
+		SmallTalkBubbleText.Size =
+			UDim2.fromScale(
+				1,
+				1
+			)
+
+		SmallTalkBubbleText.Text =
+			"..."
+
+		SmallTalkBubbleText.TextColor3 =
+			BubbleTextColor
+
+		SmallTalkBubbleText.TextSize =
+			BubbleTextSize
+
+		SmallTalkBubbleText.Parent =
+			SmallTalkBubble
+
+		local SmallTalkPadding =
+			Instance.new(
+				"UIPadding"
+			)
+
+		SmallTalkPadding.Name =
+			"UIPadding"
+
+		SmallTalkPadding.PaddingBottom =
+			UDim.new(
+				0,
+				12
+			)
+
+		SmallTalkPadding.PaddingLeft =
+			UDim.new(
+				0,
+				12
+			)
+
+		SmallTalkPadding.PaddingRight =
+			UDim.new(
+				0,
+				12
+			)
+
+		SmallTalkPadding.PaddingTop =
+			UDim.new(
+				0,
+				12
+			)
+
+		SmallTalkPadding.Parent =
+			SmallTalkBubbleText
+
+		--====================================================*
+		-- SMALL BUBBLE TAIL
+		--====================================================*
+
+		local SmallTailFrame =
+			Instance.new(
+				"Frame"
+			)
+
+		SmallTailFrame.Name =
+			"ChatBubbleTailFrame"
+
+		SmallTailFrame.BackgroundTransparency =
+			1
+
+		SmallTailFrame.Position =
+			UDim2.fromScale(
+				0.5,
+				1
+			)
+
+		SmallTailFrame.Size =
+			UDim2.fromScale(
+				0.5,
+				0.5
+			)
+
+		SmallTailFrame.SizeConstraint =
+			Enum.SizeConstraint.RelativeXX
+
+		SmallTailFrame.Parent =
+			SmallTalkBubble
+
+		local SmallTail =
+			Instance.new(
+				"ImageLabel"
+			)
+
+		SmallTail.Name =
+			"ChatBubbleTail"
+
+		SmallTail.BackgroundTransparency =
+			1
+
+		SmallTail.BorderSizePixel =
+			0
+
+		SmallTail.Image =
+			"rbxasset://textures/ui/dialog_tail.png"
+
+		SmallTail.ImageColor3 =
+			BubbleBackground
+
+		SmallTail.Position =
+			UDim2.fromScale(
+				-0.5,
+				0
+			)
+
+		SmallTail.Size =
+			UDim2.fromScale(
+				1,
+				0.5
+			)
+
+		SmallTail.Parent =
+			SmallTailFrame
+
+		--====================================================*
+		-- MAIN BUBBLE
+		--====================================================*
+
+		local ChatBubble =
+			Instance.new(
+				"ImageLabel"
+			)
+
+		ChatBubble.Name =
+			"ChatBubble"
+
+		ChatBubble.AnchorPoint =
+			Vector2.new(
+				0.5,
+				1
+			)
+
+		ChatBubble.BackgroundTransparency =
+			1
+
+		ChatBubble.BorderSizePixel =
+			0
+
+		ChatBubble.Image =
+			"rbxasset://textures/ui/dialog_white.png"
+
+		ChatBubble.ImageColor3 =
+			BubbleBackground
+
+		ChatBubble.Position =
+			UDim2.fromScale(
+				0.5,
+				1
+			)
+
+		ChatBubble.ScaleType =
+			Enum.ScaleType.Slice
+
+		ChatBubble.SliceCenter =
+			Rect.new(
+				5,
+				5,
+				15,
+				15
+			)
+
+		ChatBubble.Visible =
+			false
+
+		ChatBubble.Parent =
+			BillboardFrame
+
+		--====================================================*
+		-- MAIN TEXT
+		--====================================================*
+
+		local BubbleText =
+			Instance.new(
+				"TextLabel"
+			)
+
+		BubbleText.Name =
+			"BubbleText"
+
+		BubbleText.BackgroundTransparency =
+			1
+
+		BubbleText.ClipsDescendants =
+			true
+
+		BubbleText.FontFace =
+			BubbleFont
+
+		BubbleText.Size =
+			UDim2.fromScale(
+				1,
+				1
+			)
+
+		BubbleText.Text =
+			""
+
+		BubbleText.TextColor3 =
+			BubbleTextColor
+
+		BubbleText.TextSize =
+			BubbleTextSize
+
+		BubbleText.TextWrapped =
+			true
+
+		BubbleText.Parent =
+			ChatBubble
+
+		local UIPadding =
+			Instance.new(
+				"UIPadding"
+			)
+
+		UIPadding.Name =
+			"UIPadding"
+
+		UIPadding.PaddingBottom =
+			UDim.new(
+				0,
+				12
+			)
+
+		UIPadding.PaddingLeft =
+			UDim.new(
+				0,
+				12
+			)
+
+		UIPadding.PaddingRight =
+			UDim.new(
+				0,
+				12
+			)
+
+		UIPadding.PaddingTop =
+			UDim.new(
+				0,
+				12
+			)
+
+		UIPadding.Parent =
+			BubbleText
+
+		--====================================================*
+		-- MAIN TAIL
+		--====================================================*
+
+		local ChatBubbleTail =
+			Instance.new(
+				"ImageLabel"
+			)
+
+		ChatBubbleTail.Name =
+			"ChatBubbleTail"
+
+		ChatBubbleTail.BackgroundTransparency =
+			1
+
+		ChatBubbleTail.BorderSizePixel =
+			0
+
+		ChatBubbleTail.Image =
+			"rbxasset://textures/ui/dialog_tail.png"
+
+		ChatBubbleTail.ImageColor3 =
+			BubbleBackground
+
+		ChatBubbleTail.Position =
+			UDim2.new(
+				0.5,
+				-14,
+				1,
+				0
+			)
+
+		ChatBubbleTail.Size =
+			UDim2.fromOffset(
+				30,
+				14
+			)
+
+		ChatBubbleTail.Visible =
+			false
+
+		ChatBubbleTail.Parent =
+			BillboardFrame
+
+		--====================================================*
+		-- CALCULATE TEXT SIZE
+		--====================================================*
+
+		local TextSizeBounds =
+			TextService:GetTextSize(
+				Message,
+				BubbleText.TextSize,
+				BubbleText.Font,
+				Vector2.new(
+					MAX_BUBBLE_WIDTH,
+					math.huge
+				)
+			)
+
+		local Multiline =
+			TextSizeBounds.Y
+			> BubbleText.TextSize
+
+		if not Multiline then
+
+			UIPadding.PaddingTop =
+				UDim.new(
+					0,
+					UIPadding.PaddingTop.Offset / 2
+				)
+
+			UIPadding.PaddingBottom =
+				UDim.new(
+					0,
+					UIPadding.PaddingBottom.Offset / 2
+				)
+
+		end
+
+		local ChatBubbleSize =
+			UDim2.fromOffset(
+				TextSizeBounds.X
+				+ UIPadding.PaddingLeft.Offset
+				+ UIPadding.PaddingRight.Offset
+				+ 1,
+
+				TextSizeBounds.Y
+				+ UIPadding.PaddingTop.Offset
+				+ UIPadding.PaddingBottom.Offset
+			)
+
+		--====================================================*
+		-- START SLIGHTLY BIGGER
+		--====================================================*
+
+		ChatBubble.Size =
+			UDim2.fromOffset(
+				ChatBubbleSize.X.Offset + 10,
+				ChatBubbleSize.Y.Offset + 10
+			)
+
+		local ResizeTween =
+			TweenService:Create(
+				ChatBubble,
+				ResizeBubbleTweenInfo,
+				{
+					Size =
+						ChatBubbleSize
+				}
+			)
+
+		ResizeTween:Play()
+
+		task.delay(
+			ResizeBubbleTweenInfo.Time,
+			function()
+
+				if BubbleText.Parent then
+
+					BubbleText.Text =
+						Message
+
+				end
+
+			end
+		)
+
+		--====================================================*
+		-- OFFSET
+		--====================================================*
+
+		local Lifetime
+
+		if SentBySelf then
+
+			ChatBubbleGui.StudsOffset =
+				Vector3.new(
+					0,
+					1.8,
+					0
+				)
+
+			Lifetime =
+				lerpLength(
+					Message,
+					MIN_BUBBLE_LIFETIME_SELF,
+					MAX_BUBBLE_LIFETIME_SELF
+				)
+
+		else
+
+			ChatBubbleGui.StudsOffset =
+				Vector3.new(
+					0,
+					2.4,
+					0
+				)
+
+			Lifetime =
+				lerpLength(
+					Message,
+					MIN_BUBBLE_LIFETIME,
+					MAX_BUBBLE_LIFETIME
+				)
+
+		end
+
+		--====================================================*
+		-- PARENT
+		--====================================================*
+
+		ChatBubbleGui.Parent =
+			Adornee
+
+		--====================================================*
+		-- FADE
+		--====================================================*
+
+		task.delay(
+			Lifetime,
+			function()
+
+				if not ChatBubbleGui.Parent then
+					return
+				end
+
+				local FadeInfo =
+					TweenInfo.new(
+						BUBBLE_FADE_TIME,
+						Enum.EasingStyle.Linear
+					)
+
+				for _, Object in ipairs(
+					ChatBubbleGui:GetDescendants()
+				) do
+
+					if Object:IsA(
+						"ImageLabel"
+					) then
+
+						TweenService:Create(
+							Object,
+							FadeInfo,
+							{
+								ImageTransparency = 1
+							}
+						):Play()
+
+					elseif Object:IsA(
+						"TextLabel"
+					) then
+
+						TweenService:Create(
+							Object,
+							FadeInfo,
+							{
+								TextTransparency = 1
+							}
+						):Play()
+
+					end
+
+				end
+
+			end
+		)
+
+		Debris:AddItem(
+			ChatBubbleGui,
+			Lifetime
+			+ BUBBLE_FADE_TIME
+			+ 0.1
+		)
+
+		addBubbleToQueue(
+			Adornee,
+			ChatBubbleGui,
+			Lifetime
+		)
+
+	end
+
+	--============================================================*
+	-- RECEIVE TEXTCHAT MESSAGE
+	--============================================================*
+
+	TextChatService.MessageReceived:Connect(
+		function(
+			TextChatMessage
+		)
+
+			local TextSource =
+				TextChatMessage.TextSource
+
+			-- System messages don't belong
+			-- to a player's head.
+			if not TextSource then
+				return
+			end
+
+			local Player =
+				Players:GetPlayerByUserId(
+					TextSource.UserId
+				)
+
+			if not Player then
+				return
+			end
+
+			local Character =
+				Player.Character
+
+			if not Character then
+				return
+			end
+
+			local Adornee =
+				Character:FindFirstChild(
+					"Head"
+				)
+
+			if not Adornee then
+
+				Adornee =
+					Character:FindFirstChild(
+						"HumanoidRootPart"
+					)
+
+			end
+
+			if not Adornee then
+
+				Adornee =
+					Character
+
+			end
+
+			if not Adornee then
+				return
+			end
+
+			local Message =
+				TextChatMessage.Text
+
+			if
+				not Message
+				or Message == ""
+			then
+				return
+			end
+
+			createBubble(
+				Adornee,
+				Message,
+				Player == LocalPlayer
+			)
+
+		end
+	)
+
+	--============================================================*
+	-- BUBBLE DISTANCE / VISIBILITY
+	--============================================================*
+
+	task.spawn(function()
+
+		while true do
+
+			task.wait()
+
+			Camera =
+				workspace.CurrentCamera
+
+			if not Camera then
+				continue
+			end
+
+			for Adornee, Queue in pairs(
+				ChatBubbleQueues
+			) do
+
+				if
+					not Adornee
+					or not Adornee.Parent
+				then
+
+					ChatBubbleQueues[
+						Adornee
+					] = nil
+
+					continue
+
+				end
+
+				if #Queue == 0 then
+					continue
+				end
+
+				local MostRecentChatBubble =
+					Queue[1]
+
+				if
+					not MostRecentChatBubble
+					or not MostRecentChatBubble.Parent
+				then
+
+					continue
+
+				end
+
+				local DistanceFromAdornee
+
+				pcall(function()
+
+					DistanceFromAdornee =
+						(
+							Camera.CFrame.Position
+							-
+							Adornee:GetPivot().Position
+						).Magnitude
+
+				end)
+
+				if not DistanceFromAdornee then
+					continue
+				end
+
+				for Index, BubbleGui in ipairs(
+					Queue
+				) do
+
+					if not BubbleGui.Parent then
+						continue
+					end
+
+					local BillboardFrame =
+						BubbleGui:FindFirstChild(
+							"BillboardFrame"
+						)
+
+					if not BillboardFrame then
+						continue
+					end
+
+					local MainBubble =
+						BillboardFrame:FindFirstChild(
+							"ChatBubble"
+						)
+
+					local SmallBubble =
+						BillboardFrame:FindFirstChild(
+							"SmallTalkBubble"
+						)
+
+					local MainTail =
+						BillboardFrame:FindFirstChild(
+							"ChatBubbleTail"
+						)
+
+					if
+						DistanceFromAdornee
+						< NEAR_BUBBLE_DISTANCE
+					then
+
+						--================================================*
+						-- NEAR
+						--================================================*
+
+						if Index == 1 then
+
+							if MainBubble then
+								MainBubble.Visible = true
+							end
+
+							if MainTail then
+								MainTail.Visible = true
+							end
+
+						else
+
+							if MainBubble then
+								MainBubble.Visible = true
+							end
+
+							if MainTail then
+								MainTail.Visible = false
+							end
+
+						end
+
+						if SmallBubble then
+							SmallBubble.Visible = false
+						end
+
+						BubbleGui.Enabled =
+							true
+
+					elseif
+						DistanceFromAdornee
+						< MAX_BUBBLE_DISTANCE
+						and Index == 1
+					then
+
+						--================================================*
+						-- MEDIUM DISTANCE
+						--================================================*
+
+						if MainBubble then
+							MainBubble.Visible = false
+						end
+
+						if MainTail then
+							MainTail.Visible = false
+						end
+
+						if SmallBubble then
+							SmallBubble.Visible = true
+						end
+
+						BubbleGui.Enabled =
+							true
+
+					else
+
+						--================================================*
+						-- FAR
+						--================================================*
+
+						BubbleGui.Enabled =
+							false
+
+					end
+
+				end
+
+			end
+
+		end
+
+	end)
+
+end)
+
+Run(Settings.HideDisplayName, function()
+
+	-- Functions
+
+	local Change = function(Player)
+
+		local Character =
+			(
+				Player.Character
+				or Player.CharacterAdded:Wait()
+			)
+
+		local Humanoid =
+			(
+				Character
+				and Character:FindFirstChildOfClass(
+					"Humanoid"
+				)
+			)
+
+		if
+			(Humanoid
+			and Humanoid.DisplayName
+			== Player.DisplayName)
+		then
+
+			Humanoid.DisplayName =
+				Player.Name
+
+		else
+
+			Character.ChildAdded:Connect(
+				function(Humanoid)
+
+					if
+						(Humanoid:IsA("Humanoid")
+						and Humanoid.DisplayName
+						== Player.DisplayName)
+					then
+
+						Humanoid.DisplayName =
+							Player.Name
+
+					end
+
+				end
+			)
+
+		end
+
+	end
+
+	local Joined = function(Player)
+
+		Change(Player)
+
+		Player.CharacterAdded:Connect(
+			function()
+				Change(Player)
+			end
+		)
+
+	end
+
+	-- Setup
+
+	for _, Player in next,
+		Players:GetPlayers()
+	do
+
+		task.spawn(
+			Joined,
+			Player
+		)
+
+	end
+
+	Players.PlayerAdded:Connect(
+		Joined
+	)
+
+end)
+
+-- TOP BAR
+--
+-- The old script assumes:
+--
+--	CoreGui.TopBarApp.TopBarApp
+--
+-- That hierarchy is not guaranteed to be identical on mobile.
+-- Find whatever part actually exists instead of indexing nil.
+
+task.spawn(function()
+
+	local TopBarApp =
+		CoreGui:WaitForChild(
+			"TopBarApp",
+			10
+		)
+
+	if not TopBarApp then
+		return
+	end
+
+	-- Original expected hierarchy.
+
+	local NestedTopBar =
+		TopBarApp:FindFirstChild(
+			"TopBarApp"
+		)
+
+	if NestedTopBar then
+
+		pcall(function()
+			Force(
+				NestedTopBar,
+				"Enabled",
+				false
+			)
+		end)
+
+	end
+
+	-- Some client versions make TopBarApp itself
+	-- the ScreenGui that needs disabling.
+
+	if TopBarApp:IsA("ScreenGui") then
+
+		Force(
+			TopBarApp,
+			"Enabled",
+			false
+		)
+
+	end
+
+	-- If neither of the above was the actual ScreenGui,
+	-- disable any ScreenGui named TopBarApp underneath it.
+
+	for _, Object in ipairs(
+		TopBarApp:GetDescendants()
+	) do
+
+		if
+			Object.Name == "TopBarApp"
+			and Object:IsA("ScreenGui")
+		then
+
+			Force(
+				Object,
+				"Enabled",
+				false
+			)
+
+		end
+
+	end
+
+end)
+
+-- SETTINGS SHIELD
+--
+-- Do not assume every client has the complete
+-- SettingsClippingShield -> SettingsShield -> Modal chain.
+
+task.spawn(function()
+
+	local SettingsClippingShield =
+		RobloxGui:WaitForChild(
+			"SettingsClippingShield",
+			10
+		)
+
+	if not SettingsClippingShield then
+		return
+	end
+
+	local SettingsShield =
+		SettingsClippingShield:WaitForChild(
+			"SettingsShield",
+			10
+		)
+
+	if not SettingsShield then
+		return
+	end
+
+	local Modal =
+		SettingsShield:FindFirstChild(
+			"Modal"
+		)
+
+	if not Modal then
+
+		Modal =
+			SettingsShield:WaitForChild(
+				"Modal",
+				10
+			)
+
+	end
+
+	if Modal then
+
+		Set(
+			Modal,
+			{
+				Visible = false,
+
+				Modal = false,
+			},
+			true
+		)
+
+	end
+
+end)
+
+-- CONTROL FRAME
+--
+-- This is the important mobile fix.
+--
+-- ControlFrame is part of the old desktop CoreGui setup.
+-- Do NOT destroy it on a touch device.
+--
+-- On PC we keep the original behavior and remove it.
+
+task.spawn(function()
+
+	if IsTouchDevice then
+		return
+	end
+
+	local ControlFrame =
+		RobloxGui:WaitForChild(
+			"ControlFrame",
+			10
+		)
+
+	if ControlFrame then
+
+		ControlFrame:Destroy()
+
+	end
+
+end) 
