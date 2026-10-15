@@ -2802,13 +2802,62 @@ task.spawn(function()
 	--
 	-- In 2017 a dropdown (and each entry in its list) turned blue only
 	-- while your finger was on it and went back to grey when you let
-	-- go. The port leaves it blue, so put the normal image back once a
-	-- touch or click ends. Only the image and its tint are restored;
-	-- greyed-out states use transparency and are left alone.
+	-- go. The port leaves it blue: it keeps the dropdown "selected" (a
+	-- gamepad highlight that means nothing on a touch screen) and the
+	-- finger lifting isn't always noticed. So:
+	--
+	--	* drop that selection when it lands on one of these buttons
+	--	  while you're using touch,
+	--	* put the normal image back when a touch on the button ends, and
+	--	* on touch, put it back whenever it turns blue while nothing is
+	--	  pressing it.
+	--
+	-- Only the image and its tint are restored; greyed-out states use
+	-- transparency and are left alone.
+
+	local GuiService = game:GetService("GuiService")
 
 	local NormalLooks = setmetatable({}, { __mode = "k" })
 
+	local Pressed = setmetatable({}, { __mode = "k" })
+
 	local LookProperties = { "Image", "ImageColor3" }
+
+	local IsPointer = function(Input: InputObject)
+
+		return Input.UserInputType == Enum.UserInputType.Touch
+			or Input.UserInputType == Enum.UserInputType.MouseButton1
+
+	end
+
+	local UsingTouch = function()
+		return UserInputService:GetLastInputType() == Enum.UserInputType.Touch
+	end
+
+	local Restore = function(Button: GuiButton)
+
+		local Look = NormalLooks[Button]
+
+		if not Look or Pressed[Button] or not Button.Parent then
+			return
+		end
+
+		for _, Entry in ipairs(Look) do
+
+			local Object, Property, Value = Entry[1], Entry[2], Entry[3]
+
+			if Object.Parent and Object[Property] ~= Value then
+				Object[Property] = Value
+			end
+
+		end
+
+	end
+
+	local RestoreSoon = function(Button: GuiButton)
+		task.delay(0.1, Restore, Button)
+		task.delay(0.5, Restore, Button)
+	end
 
 	local SaveLook = function(Button: GuiButton)
 
@@ -2825,7 +2874,17 @@ task.spawn(function()
 					end)
 
 					if Success then
+
 						table.insert(Look, { Object, Property, Value })
+
+						Object:GetPropertyChangedSignal(Property):Connect(function()
+
+							if not Pressed[Button] and UsingTouch() then
+								RestoreSoon(Button)
+							end
+
+						end)
+
 					end
 
 				end
@@ -2836,39 +2895,83 @@ task.spawn(function()
 
 		NormalLooks[Button] = Look
 
-	end
+		Button.InputBegan:Connect(function(Input)
 
-	local RestoreLooks = function()
-
-		for Button, Look in pairs(NormalLooks) do
-
-			if Button.Parent then
-
-				for _, Entry in ipairs(Look) do
-
-					local Object, Property, Value = Entry[1], Entry[2], Entry[3]
-
-					if Object.Parent and Object[Property] ~= Value then
-						Object[Property] = Value
-					end
-
-				end
-
+			if not IsPointer(Input) then
+				return
 			end
 
-		end
+			local Token = {}
+
+			Pressed[Button] = Token
+
+			-- In case the lift is never reported.
+
+			task.delay(3, function()
+
+				if Pressed[Button] == Token then
+					Pressed[Button] = nil
+					Restore(Button)
+				end
+
+			end)
+
+		end)
+
+		Button.InputEnded:Connect(function(Input)
+
+			if IsPointer(Input) then
+				Pressed[Button] = nil
+				RestoreSoon(Button)
+			end
+
+		end)
+
+		Button.MouseLeave:Connect(function()
+			Pressed[Button] = nil
+			RestoreSoon(Button)
+		end)
 
 	end
 
 	UserInputService.InputEnded:Connect(function(Input)
 
-		if
-			Input.UserInputType == Enum.UserInputType.Touch
-			or Input.UserInputType == Enum.UserInputType.MouseButton1
-		then
-			task.delay(0.1, RestoreLooks)
-			task.delay(0.5, RestoreLooks)
+		if not IsPointer(Input) then
+			return
 		end
+
+		for Button in pairs(NormalLooks) do
+			Pressed[Button] = nil
+			RestoreSoon(Button)
+		end
+
+	end)
+
+	pcall(function()
+
+		GuiService:GetPropertyChangedSignal("SelectedCoreObject"):Connect(function()
+
+			local Selected = GuiService.SelectedCoreObject
+
+			if not Selected or not NormalLooks[Selected] or not UsingTouch() then
+				return
+			end
+
+			task.defer(function()
+
+				pcall(function()
+
+					if GuiService.SelectedCoreObject == Selected then
+						GuiService.SelectedCoreObject = nil
+					end
+
+				end)
+
+				RestoreSoon(Selected)
+
+			end)
+
+		end)
 
 	end)
 
