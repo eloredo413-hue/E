@@ -2456,10 +2456,14 @@ end)
 --	  the Report tab, sets "Game or Player?" to Player and picks that
 --	  player, firing each button's click handler exactly once.
 --
---	* Your own row has no flag, since you can't report yourself.
+--	* Your own row has no flag, since you can't report yourself. It
+--	  stays hidden when the menu reopens or the tab changes.
 --
 -- "Add Friend" falls back to the friend request prompt when the
 -- legacy button didn't send a request.
+--
+-- Entries in the Report tab's lists ("Which Player?", "Type Of
+-- Abuse") go back from blue to grey when you let go, like in 2017.
 
 task.spawn(function()
 
@@ -2564,7 +2568,7 @@ task.spawn(function()
 					or HasText(Row, Player.DisplayName)
 					or HasText(Row, "@" .. Player.Name)
 				then
-					return Player
+					return Player, Row
 				end
 
 			end
@@ -2572,7 +2576,7 @@ task.spawn(function()
 			for _, Player in ipairs(Players:GetPlayers()) do
 
 				if Row.Name:find(Player.Name, 1, true) then
-					return Player
+					return Player, Row
 				end
 
 			end
@@ -2706,6 +2710,171 @@ task.spawn(function()
 		RemoveDuplicateIcons(Flag)
 
 	end
+
+	-- Own row
+	--
+	-- You can't report yourself, so your own row has no flag. The menu
+	-- shows flags again when the page reopens or the tab changes and
+	-- can fill rows in after the flag, so check again whenever the flag
+	-- is shown or the row's text changes.
+
+	local HiddenOwn = setmetatable({}, { __mode = "k" })
+
+	local WatchOwnFlag = function(Flag: GuiButton)
+
+		local Update = function()
+
+			if not Flag.Parent then
+				return
+			end
+
+			local Player = FindRowPlayer(Flag)
+
+			if Player == LocalPlayer then
+
+				if Flag.Visible then
+					HiddenOwn[Flag] = true
+					Flag.Visible = false
+				end
+
+			elseif Player and HiddenOwn[Flag] then
+
+				-- The row now belongs to someone else.
+
+				HiddenOwn[Flag] = nil
+				Flag.Visible = true
+
+			end
+
+		end
+
+		-- Again at the end of the frame, in case the menu changes the
+		-- row right after.
+
+		local Check = function()
+			Update()
+			task.defer(Update)
+		end
+
+		local Connections = {}
+
+		local WatchText = function(Object: Instance)
+
+			if Object:IsA("TextLabel") or Object:IsA("TextButton") then
+				table.insert(Connections, Object:GetPropertyChangedSignal("Text"):Connect(Check))
+			end
+
+		end
+
+		table.insert(Connections, Flag:GetPropertyChangedSignal("Visible"):Connect(Check))
+
+		table.insert(Connections, Flag.AncestryChanged:Connect(Check))
+
+		local _, Row = FindRowPlayer(Flag)
+
+		if Row then
+
+			for _, Descendant in ipairs(Row:GetDescendants()) do
+				WatchText(Descendant)
+			end
+
+			table.insert(Connections, Row.DescendantAdded:Connect(function(Descendant)
+				WatchText(Descendant)
+				Check()
+			end))
+
+		end
+
+		Flag.Destroying:Connect(function()
+
+			for _, Connection in ipairs(Connections) do
+				Connection:Disconnect()
+			end
+
+		end)
+
+		Check()
+
+	end
+
+	-- Pressed look
+	--
+	-- In 2017 an entry in a Report tab list turned blue only while your
+	-- finger was on it and went back to grey when you let go. The port
+	-- leaves it blue, so put the normal look back once a touch or
+	-- click ends.
+
+	local NormalLooks = setmetatable({}, { __mode = "k" })
+
+	local LookProperties = {
+		"Image",
+		"ImageColor3",
+		"ImageTransparency",
+		"BackgroundColor3",
+		"BackgroundTransparency",
+	}
+
+	local SaveLook = function(Button: GuiButton)
+
+		local Look = {}
+
+		for _, Object in ipairs({ Button, table.unpack(Button:GetChildren()) }) do
+
+			if Object == Button or Object:IsA("ImageLabel") then
+
+				for _, Property in ipairs(LookProperties) do
+
+					local Success, Value = pcall(function()
+						return Object[Property]
+					end)
+
+					if Success then
+						table.insert(Look, { Object, Property, Value })
+					end
+
+				end
+
+			end
+
+		end
+
+		NormalLooks[Button] = Look
+
+	end
+
+	local RestoreLooks = function()
+
+		for Button, Look in pairs(NormalLooks) do
+
+			if Button.Parent then
+
+				for _, Entry in ipairs(Look) do
+
+					local Object, Property, Value = Entry[1], Entry[2], Entry[3]
+
+					if Object.Parent and Object[Property] ~= Value then
+						Object[Property] = Value
+					end
+
+				end
+
+			end
+
+		end
+
+	end
+
+	UserInputService.InputEnded:Connect(function(Input)
+
+		if
+			Input.UserInputType == Enum.UserInputType.Touch
+			or Input.UserInputType == Enum.UserInputType.MouseButton1
+		then
+			task.delay(0.1, RestoreLooks)
+			task.delay(0.5, RestoreLooks)
+		end
+
+	end)
 
 	-- Run a button's own click handler once, like a single tap.
 
@@ -2996,19 +3165,7 @@ task.spawn(function()
 					task.defer(RemoveDuplicateIcons, Object)
 				end)
 
-				-- You can't report yourself, so no flag on your own row.
-
-				local HideOwnFlag = function()
-
-					if Object.Visible and FindRowPlayer(Object) == LocalPlayer then
-						Object.Visible = false
-					end
-
-				end
-
-				HideOwnFlag()
-
-				Object:GetPropertyChangedSignal("Visible"):Connect(HideOwnFlag)
+				WatchOwnFlag(Object)
 
 			end
 
@@ -3032,10 +3189,49 @@ task.spawn(function()
 
 	end
 
-	for _, Object in ipairs(LegacyGui:GetDescendants()) do
-		Hook(Object)
+	-- List entries sit inside the dropdown's frames and show text.
+
+	local HookListEntry = function(Object: Instance)
+
+		if NormalLooks[Object] or not Object:IsA("GuiButton") then
+			return
+		end
+
+		-- Saved once the entry is built, before anyone touches it.
+
+		task.defer(function()
+
+			local Text = Object.Parent and OwnText(Object)
+
+			if NormalLooks[Object] or not Text or Text == "" then
+				return
+			end
+
+			local Current = Object.Parent
+
+			while Current and Current ~= LegacyGui do
+
+				if Current.Name:lower():find("dropdown") then
+					SaveLook(Object)
+					return
+				end
+
+				Current = Current.Parent
+
+			end
+
+		end)
+
 	end
 
-	LegacyGui.DescendantAdded:Connect(Hook)
+	for _, Object in ipairs(LegacyGui:GetDescendants()) do
+		Hook(Object)
+		HookListEntry(Object)
+	end
+
+	LegacyGui.DescendantAdded:Connect(function(Object)
+		Hook(Object)
+		HookListEntry(Object)
+	end)
 
 end)
