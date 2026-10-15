@@ -10,6 +10,51 @@ if VOICE_CHAT_MODE ~= "NORMAL" and VOICE_CHAT_MODE ~= "NEVER" then
 end
 VOICE_CHAT_FORCE_OFF = VOICE_CHAT_MODE == "NEVER"
 
+-- ============================================================
+-- CRASH DIAGNOSTICS (set these on getgenv() BEFORE running this script)
+--
+--   getgenv().Settings2016Trace = true
+--       Before each risky step of opening/closing the menu, a numbered line is
+--       appended to workspace/Settings2016_trace.txt AND copied to the clipboard.
+--       If Roblox dies, the LAST line names the step that never finished.
+--
+--   getgenv().Settings2016Safe = { NoInputLock = true, NoCoreGui = true,
+--                                  NoNativeHide = true, NoTopBar = true }
+--       Skips that part of the open/close sequence so you can find which one
+--       triggers a crash. Anything left out of the table behaves normally.
+-- ============================================================
+SafeFlag = function(Name)
+	local Env = getgenv and getgenv() or nil
+	local Flags = Env and Env.Settings2016Safe
+	return type(Flags) == "table" and Flags[Name] == true
+end
+
+TraceCount = 0
+TraceBuffer = {}
+Trace = function(Label)
+	local Env = getgenv and getgenv() or nil
+	if not (Env and Env.Settings2016Trace) then return end
+	TraceCount = TraceCount + 1
+	local Line = string.format("%04d t=%.3f %s", TraceCount, os.clock(), tostring(Label))
+	pcall(function()
+		if appendfile then
+			appendfile("Settings2016_trace.txt", Line .. "\n")
+		elseif writefile then
+			TraceBuffer[#TraceBuffer + 1] = Line
+			if #TraceBuffer > 200 then table.remove(TraceBuffer, 1) end
+			writefile("Settings2016_trace.txt", table.concat(TraceBuffer, "\n"))
+		end
+	end)
+	pcall(function() if setclipboard then setclipboard(Line) end end)
+end
+do
+	local Env = getgenv and getgenv() or nil
+	if Env and Env.Settings2016Trace then
+		pcall(function() if writefile then writefile("Settings2016_trace.txt", "") end end)
+		Trace("trace started")
+	end
+end
+
 -- INVITE FRIENDS ROW TEXT SIZE (applies on every device)
 -- Adjust these values to tune how small/large "Invite friends to join" can render.
 INVITE_FRIENDS_TEXT_MIN_SIZE = 18
@@ -5358,6 +5403,7 @@ SwitchToPage = function(
 	if not Page then
 		return
 	end
+	Trace("SwitchToPage " .. tostring(Page.Name))
 
 	local OldPage =
 		Hub.CurrentPage
@@ -6024,7 +6070,7 @@ EnsureVoiceAnalyzer = function(Player, InputOverride)
 	end)
 	if not Analyzer then
 		Protect(function()
-			Analyzer = Instance.new("AudioAnalyzer")
+			Trace("new AudioAnalyzer") Analyzer = Instance.new("AudioAnalyzer")
 			Analyzer.Name = "Settings2016VoiceAnalyzer_" .. tostring(Player.UserId)
 			Analyzer.SpectrumEnabled = false
 			Analyzer.Parent = SoundService
@@ -6044,7 +6090,7 @@ EnsureVoiceAnalyzer = function(Player, InputOverride)
 
 	if not Wire then
 		Protect(function()
-			Wire = Instance.new("Wire")
+			Trace("new Wire") Wire = Instance.new("Wire")
 			Wire.Name = "Settings2016VoiceAnalyzerWire"
 			Wire.SourceInstance = Input
 			Wire.SourceName = "Output"
@@ -6176,7 +6222,7 @@ EnsureVoiceMeterAnalyzer = function(Player)
 	end
 	if not Analyzer then
 		pcall(function()
-			Analyzer = Instance.new("AudioAnalyzer")
+			Trace("new AudioAnalyzer") Analyzer = Instance.new("AudioAnalyzer")
 			Analyzer.Name = "Settings2016VoiceAnalyzer_" .. tostring(Player.UserId)
 			Analyzer.SpectrumEnabled = false
 			Analyzer.Parent = SoundService
@@ -6195,7 +6241,7 @@ EnsureVoiceMeterAnalyzer = function(Player)
 	end
 	if not Wire then
 		pcall(function()
-			Wire = Instance.new("Wire")
+			Trace("new Wire") Wire = Instance.new("Wire")
 			Wire.Name = "Settings2016VoiceMeterWire"
 			Wire.Parent = Analyzer
 		end)
@@ -6653,8 +6699,10 @@ FindNativeVoiceIcon = function(Player)
     local Now = os.clock()
     local Object = NativeVoiceIconObjects[UserId]
     if Player == LocalPlayer then
-        if not (Object and Object.Parent and IsNativeVoiceIconVisible(Object))
-            or not NativeSelfIconProbeStamp or (Now - NativeSelfIconProbeStamp) >= 0.35 then
+        -- The menu itself hides the native settings tree, so the cached icon is
+        -- (almost) never "visible". The old condition therefore re-ran a recursive
+        -- search of the whole native tree on EVERY call (~180x/s in voice games).
+        if not NativeSelfIconProbeStamp or (Now - NativeSelfIconProbeStamp) >= 0.35 then
             NativeSelfIconProbeStamp = Now
             Object = FindLocalNativeVoiceImageObject()
             NativeVoiceIconObjects[UserId] = Object
@@ -7784,9 +7832,15 @@ SetVoiceChatPreference = function(Enabled)
 
 	local GroupId = SavedVoiceGroupId or GetLocalVoiceGroupId()
 	local JoinRequested = false
-	if VoiceChatInternal then
+	-- Do not ask Roblox to join a voice session that is already joined/joining.
+	local VoiceStateNow = string.lower(tostring(GetVoiceInternalStateText() or ""))
+	local VoiceAlreadyActive = IsLocalVoiceConnectionReady()
+		or VoiceStateNow:find("join", 1, true) ~= nil
+		or VoiceStateNow:find("connect", 1, true) ~= nil
+	if VoiceChatInternal and not VoiceAlreadyActive then
 		if GroupId ~= "" then
 			local JoinOk, JoinResult = pcall(function()
+				Trace("VoiceChatInternal:JoinByGroupId")
 				return VoiceChatInternal:JoinByGroupId(GroupId, false)
 			end)
 			JoinRequested = JoinOk and JoinResult == true
@@ -7795,6 +7849,7 @@ SetVoiceChatPreference = function(Enabled)
 		if not JoinRequested then
 			local JoinOk, JoinResult = pcall(function()
 				if type(VoiceChatInternal.Join) == "function" then
+					Trace("VoiceChatInternal:Join")
 					return VoiceChatInternal:Join()
 				end
 				return false
@@ -11091,9 +11146,21 @@ RebuildPlayersPage()
 -- set, so while the menu is closed just mark the list as stale.
 do
 	local BuildPlayersPage = RebuildPlayersPage
+	local RebuildTicket = 0
 	RebuildPlayersPage = function(...)
 		if Hub and Hub.Visible ~= true then
+			-- Menu closed: coalesce a burst of joins/leaves/voice updates into ONE
+			-- rebuild two seconds after the last change, so it is already done when
+			-- the player opens the menu. (If it is not, SetVisibility rebuilds on open.)
 			PendingPlayerListRefresh = true
+			RebuildTicket = RebuildTicket + 1
+			local Ticket = RebuildTicket
+			task.delay(2, function()
+				if Ticket == RebuildTicket and PendingPlayerListRefresh and Hub and Hub.Visible ~= true then
+					PendingPlayerListRefresh = false
+					BuildPlayersPage()
+				end
+			end)
 			return
 		end
 		return BuildPlayersPage(...)
@@ -13304,18 +13371,26 @@ SavedCoreGuiState =
 CoreGuiStateCaptured =
 	false
 
+-- Only the CoreGuis that actually overlap the 2016 menu are toggled. Health,
+-- EmotesMenu, SelfView and Captures sit behind the menu shield anyway, and
+-- switching them off/on on every open/close (SelfView and Captures in
+-- particular start/stop camera and capture UI) is risky for no visual gain.
+-- Set HIDE_EXTRA_COREGUIS = true to get the old behaviour back.
+HIDE_EXTRA_COREGUIS = false
 TOPBAR_CORE_GUI_TYPES = {
 	"Chat",
 	"PlayerList",
 	"Backpack",
-	"Health",
-	"EmotesMenu",
-	"SelfView",
-	"Captures",
 }
+if HIDE_EXTRA_COREGUIS then
+	for _, ExtraName in ipairs({"Health", "EmotesMenu", "SelfView", "Captures"}) do
+		table.insert(TOPBAR_CORE_GUI_TYPES, ExtraName)
+	end
+end
 
 SetTopbarCoreGuiEnabled =
 	function(Enabled)
+		if SafeFlag("NoCoreGui") then return end
 
 		if Enabled then
 
@@ -13332,6 +13407,7 @@ SetTopbarCoreGuiEnabled =
 				Protect(
 					function()
 
+						Trace("SetCoreGuiEnabled " .. tostring(Name) .. " -> " .. tostring(WasEnabled))
 						StarterGui:SetCoreGuiEnabled(
 							Enum.CoreGuiType[Name],
 							WasEnabled
@@ -13376,6 +13452,7 @@ SetTopbarCoreGuiEnabled =
 								CoreType
 							)
 
+						Trace("SetCoreGuiEnabled " .. tostring(Name) .. " -> false")
 						StarterGui:SetCoreGuiEnabled(
 							CoreType,
 							false
@@ -13399,6 +13476,7 @@ SetTopbarCoreGuiEnabled =
 -- The custom ESC menu owns the top-left menu while this is disabled.
 SetTopBarAppEnabled =
 	function(Enabled)
+		if SafeFlag("NoTopBar") then return false end
 		local Root = CoreGui:FindFirstChild("TopBarApp")
 		local App = Root and Root:FindFirstChild("TopBarApp")
 		if not App then return false end
@@ -15567,10 +15645,8 @@ SetUINavigationPreference = function(Enabled)
 	return Written
 end
 
--- Read the player's real UI Navigation setting. The old code forced it off at
--- load (GuiNavigationEnabled/AutoSelectGuiEnabled = false), which also broke
--- gamepad menu navigation for players who had it on.
-local UiNavigationInitial = GetUINavigationPreference() == true
+local UiNavigationInitial = false
+Protect(function() SetUINavigationPreference(false) end)
 
 UINavigationSelector = MakeSelector(
 	GamePage,
@@ -15597,7 +15673,9 @@ BindBooleanSettingRefresh = function(Selector, Object, Property)
 	Protect(function() Connect(Object:GetPropertyChangedSignal(Property), RefreshBoolean) end)
 	Spawn(function()
 		while Selector and Selector.RowFrame and Selector.RowFrame.Parent do
-			RefreshBoolean()
+			-- hidden-property reads every 0.25 s forever; only needed while visible
+			-- (the property-changed signal above covers changes made elsewhere)
+			if Hub and Hub.Visible then RefreshBoolean() end
 			Wait(0.25)
 		end
 	end)
@@ -15700,9 +15778,11 @@ Protect(function()
 end)
 Spawn(function()
 	while UINavigationSelector and UINavigationSelector.RowFrame and UINavigationSelector.RowFrame.Parent do
-		local Index = GetUINavigationPreference() and 1 or 2
-		if UINavigationSelector:GetSelectedIndex() ~= Index then
-			UINavigationSelector:SetSelectionIndex(Index, false)
+		if Hub and Hub.Visible then
+			local Index = GetUINavigationPreference() and 1 or 2
+			if UINavigationSelector:GetSelectedIndex() ~= Index then
+				UINavigationSelector:SetSelectionIndex(Index, false)
+			end
 		end
 		Wait(0.25)
 	end
@@ -15949,11 +16029,13 @@ GamePage.Frame.Size = UDim2.new(1, 0, 0, PAGE_TOP_PADDING + SettingsRowsY)
 -- Keep the Fullscreen selector synchronized if the host/window changes outside the menu.
 Spawn(function()
 	while FullscreenSelector and FullscreenSelector.RowFrame and FullscreenSelector.RowFrame.Parent do
-		local Actual = false
-		pcall(function() Actual = GameSettings:InFullScreen() == true end)
-		local Index = Actual and 1 or 2
-		if FullscreenSelector:GetSelectedIndex() ~= Index then
-			FullscreenSelector:SetSelectionIndex(Index, false)
+		if Hub and Hub.Visible then
+			local Actual = false
+			pcall(function() Actual = GameSettings:InFullScreen() == true end)
+			local Index = Actual and 1 or 2
+			if FullscreenSelector:GetSelectedIndex() ~= Index then
+				FullscreenSelector:SetSelectionIndex(Index, false)
+			end
 		end
 		Wait(0.5)
 	end
@@ -17843,6 +17925,7 @@ end)
 -- Meter discovery is handled by VoiceMeterDiscoveryWorkerStarted above; do not run a second scanner.
 
 VoiceAutoReconnectStamp = 0
+VoiceAutoReconnectCount = 0
 
 -- PeakLevel changes much faster than the GUI refresh loop. Keep the bottom
 -- microphone icon on a fast sampling loop so it follows live microphone peaks.
@@ -17878,14 +17961,24 @@ Spawn(function()
 			if not VoiceChatDesiredOn then
 				SetVoiceChatPreference(true)
 			elseif ConnectedNow then
+				VoiceAutoReconnectCount = 0
 				VoiceConnectionAttempting = false
 				VoiceChatEnabled = true
 				RefreshLocalVoiceState()
-			elseif not VoiceConnectionAttempting and (os.clock() - VoiceAutoReconnectStamp) >= 12 then
+			elseif not VoiceConnectionAttempting and VoiceAutoReconnectCount < 3
+				and (os.clock() - VoiceAutoReconnectStamp) >= 30 then
 				-- Retry quietly if the local voice session drops back to idle. Eligibility
 				-- gates this path; this does not grant voice to an ineligible account.
-				VoiceAutoReconnectStamp = os.clock()
-				SetVoiceChatPreference(true)
+				-- Only when Roblox reports the session is really over (an unreadable
+				-- state used to look "not connected" and re-joined every 12 s forever),
+				-- and at most 3 times.
+				local StateLower = string.lower(tostring(GetVoiceInternalStateText() or ""))
+				if StateLower:find("idle", 1, true) or StateLower:find("ended", 1, true) or StateLower:find("failed", 1, true) then
+					VoiceAutoReconnectStamp = os.clock()
+					VoiceAutoReconnectCount = VoiceAutoReconnectCount + 1
+					Trace("voice auto-reconnect #" .. tostring(VoiceAutoReconnectCount))
+					SetVoiceChatPreference(true)
+				end
 			end
 		end
         if VoiceGameSupported then
@@ -18172,6 +18265,7 @@ CaptureNativeSettingsSuppressionSnapshot = function(Shield, AddedObject)
 end
 
 SuppressNativeSettingsObject = function(Object)
+	if SafeFlag("NoNativeHide") then return end
 	if not Object then return end
 	local IsGuiOk, IsGui = pcall(function() return Object:IsA("GuiObject") end)
 	if not IsGuiOk or not IsGui then return end
@@ -18206,12 +18300,23 @@ HideNativeSettingsMenu =
 		local RobloxGui = CoreGui:FindFirstChild("RobloxGui")
 		local Shield = RobloxGui and RobloxGui:FindFirstChild("SettingsClippingShield")
 		if not Shield then return end
+		if SafeFlag("NoNativeHide") then return end
 		CaptureNativeSettingsSuppressionSnapshot(Shield)
 		local Snapshot = NativeSettingsSuppressionSnapshots[Shield]
 		if not Snapshot then return end
+		-- Destroyed native objects used to stay in this list forever (and pinned
+		-- their instances in memory), so every open re-walked an ever-growing list.
+		local Alive = {}
 		for _, Object in ipairs(Snapshot.Objects) do
-			if Object and Object.Parent then SuppressNativeSettingsObject(Object) end
+			if Object and Object.Parent then
+				SuppressNativeSettingsObject(Object)
+				Alive[#Alive + 1] = Object
+			else
+				Snapshot.ByObject[Object] = nil
+			end
 		end
+		Snapshot.Objects = Alive
+		Trace("native menu hidden (" .. tostring(#Alive) .. " objects)")
 	end
 
 -- ============================================================
@@ -18267,6 +18372,7 @@ ReleaseRightMouseCapture =
 		Protect(function()
 			if VirtualInputManager then
 				local MouseLocation = UserInputService:GetMouseLocation()
+				Trace("VirtualInputManager:SendMouseButtonEvent(right, up)")
 				VirtualInputManager:SendMouseButtonEvent(MouseLocation.X, MouseLocation.Y, 1, false, game, 0)
 			end
 		end)
@@ -18282,7 +18388,9 @@ SinkGameplayInput =
 
 SetGameplayInputLocked =
 	function(Locked)
+		if SafeFlag("NoInputLock") then return end
 		if InputLockBound == Locked then return end
+		Trace("input lock " .. tostring(Locked))
 		InputLockBound = Locked
 		if Locked then
 			Protect(function()
@@ -18291,9 +18399,15 @@ SetGameplayInputLocked =
 				UserInputService.MouseBehavior = Enum.MouseBehavior.Default
 				UserInputService.MouseIconEnabled = true
 			end)
-			ReleaseRightMouseCapture()
+			-- A synthetic right-button-up used to be sent through VirtualInputManager on
+			-- EVERY open. Only do it when the right button really is held, and never
+			-- on touch devices.
+			if WasRightMouseDownOnLock and not IsMobile then
+				Trace("release right mouse")
+				ReleaseRightMouseCapture()
+			end
 			InputLockActions = {}
-			for Index, Input in next, InputLockInputs do
+			for Index, Input in next, (IsMobile and {} or InputLockInputs) do
 				local ActionName = INPUT_LOCK_ACTION .. tostring(Index)
 				local Bound = Protect(function()
 					ContextActionService:BindCoreActionAtPriority(ActionName, SinkGameplayInput, false, 10000, Input)
@@ -18355,7 +18469,9 @@ SetVisibility =
 			end
 		end
 
+		Trace("SetVisibility(" .. tostring(Visible) .. ") begin")
 		SetGameplayInputLocked(Visible)
+		Trace("input lock step done")
 
 		if Visible then
 			SystemMenuButtonClosing = false
@@ -18367,9 +18483,13 @@ SetVisibility =
 				SystemMenuHitbox.Position = UDim2.fromOffset(GetSystemMenuButtonOffsetX() - 4, SYSTEM_MENU_OFFSET_Y - 4)
 				SystemMenuHitbox.Size = UDim2.fromOffset(40, 40)
 			end
+			Trace("open: hide native settings")
 			HideNativeSettingsMenu()
+			Trace("open: topbar off")
 			SetTopBarAppEnabled(false)
+			Trace("open: coregui off")
 			SetTopbarCoreGuiEnabled(false)
+			Trace("open: show shield")
 			Hub.Shield.Visible = true
 			Hub.HubBar.Visible = not Hub.InInviteMenu and not Hub.InConfirmation
 			Hub.PageClipper.Visible = true
@@ -18391,14 +18511,19 @@ SetVisibility =
 
 			-- Native voice icons are refreshed asynchronously by CoreGui events and the
 			-- throttled voice cache loop; don't scan GUI descendants in the opening frame.
+			Trace("open: switch page")
 			SwitchToPage(CustomPage or PlayersPage, true)
 			if PendingPlayerListRefresh and PlayersPage then
+				Trace("open: rebuild players")
 				RebuildPlayersPage()
 				LayoutTabs()
 				PendingPlayerListRefresh = false
 			end
+			Trace("open: configure buttons")
 			ConfigureMobileActionButtons()
+			Trace("open: resize")
 			ResizeHub()
+			Trace("open: done")
 			if IsMobile and not IsTablet then
 				task.defer(function()
 					if not Hub.Visible or not PlayersPage or not PlayersPage.Frame then return end
@@ -18412,8 +18537,11 @@ SetVisibility =
 		else
 			-- Keep the native TopBarApp disabled while the custom menu is closing.
 			-- It is re-enabled only after the closing tween has actually finished.
+			Trace("close: topbar off")
 			SetTopBarAppEnabled(false)
+			Trace("close: coregui restore")
 			SetTopbarCoreGuiEnabled(true)
+			Trace("close: coregui restored")
 			if SystemMenuButton then
 				-- Keep the visible 30x30 SystemMenuButton unchanged for the entire
 				-- closing tween. Only hide it in the tween completion callback below.
@@ -18642,6 +18770,7 @@ AlignSystemMenuButton =
 
 local ActivateCustomSystemMenu = function()
 	if Hub and Hub.NativeMuteTransaction then return end
+	Trace("ActivateCustomSystemMenu (top-left button)")
 	Hub.SuppressNativeOpenUntil = tick() + 1.0
 	HideNativeSettingsMenu()
 	HideNativeSystemMenuButtons()
@@ -18729,6 +18858,7 @@ CloseInvitePage =
 EscapeAction =
 	function(_, State)
 		if State ~= Enum.UserInputState.Begin then return Enum.ContextActionResult.Sink end
+		Trace("EscapeAction")
 		local CurrentTime = tick()
 		if CurrentTime - LastEscapeAction < 0.18 then return Enum.ContextActionResult.Sink end
 		LastEscapeAction = CurrentTime
@@ -18861,6 +18991,7 @@ HookNativeMenu =
 			task.defer(function()
 				NativeMenuOpenQueued = false
 				if not Hub or tick() < (Hub.SuppressNativeOpenUntil or 0) then return end
+				Trace("native menu opened -> custom menu")
 				HideNativeSettingsMenu()
 				HideNativeSystemMenuButtons()
 				local Target = Hub.NativeMenuTarget
