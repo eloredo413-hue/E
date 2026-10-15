@@ -2456,6 +2456,8 @@ end)
 --	  the Report tab, sets "Game or Player?" to Player and picks that
 --	  player, firing each button's click handler exactly once.
 --
+--	* Your own row has no flag, since you can't report yourself.
+--
 -- "Add Friend" falls back to the friend request prompt when the
 -- legacy button didn't send a request.
 
@@ -2553,14 +2555,23 @@ task.spawn(function()
 				return nil
 			end
 
+			-- Exact labels first so "Bob" never claims "Bob2"'s row.
+
 			for _, Player in ipairs(Players:GetPlayers()) do
 
 				if
-					Row.Name:find(Player.Name, 1, true)
-					or HasText(Row, Player.Name)
+					HasText(Row, Player.Name)
 					or HasText(Row, Player.DisplayName)
 					or HasText(Row, "@" .. Player.Name)
 				then
+					return Player
+				end
+
+			end
+
+			for _, Player in ipairs(Players:GetPlayers()) do
+
+				if Row.Name:find(Player.Name, 1, true) then
 					return Player
 				end
 
@@ -2939,6 +2950,20 @@ task.spawn(function()
 				Object.ChildAdded:Connect(function()
 					task.defer(RemoveDuplicateIcons, Object)
 				end)
+
+				-- You can't report yourself, so no flag on your own row.
+
+				local HideOwnFlag = function()
+
+					if Object.Visible and FindRowPlayer(Object) == LocalPlayer then
+						Object.Visible = false
+					end
+
+				end
+
+				HideOwnFlag()
+
+				Object:GetPropertyChangedSignal("Visible"):Connect(HideOwnFlag)
 
 			end
 
