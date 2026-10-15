@@ -2441,3 +2441,414 @@ task.spawn(function()
 	end
 
 end) 
+
+-- REPORT FLAGS
+--
+-- The flag buttons next to "Add Friend" on the Players tab do
+-- nothing when tapped. In 2017 they opened the Report tab with
+-- "Player" mode and that player already selected.
+--
+-- Hook every flag button and drive the Report tab ourselves.
+
+task.spawn(function()
+
+	local Hooked = setmetatable({}, { __mode = "k" })
+
+	local Busy = false
+
+	local GetText = function(Object: Instance)
+
+		if Object:IsA("TextLabel") or Object:IsA("TextButton") then
+			return Object.Text
+		end
+
+		return nil
+
+	end
+
+	local HasText = function(Object: Instance, Text: string)
+
+		if GetText(Object) == Text then
+			return true
+		end
+
+		for _, Descendant in ipairs(Object:GetDescendants()) do
+
+			if GetText(Descendant) == Text then
+				return true
+			end
+
+		end
+
+		return false
+
+	end
+
+	local IsShown = function(Object: Instance)
+
+		local Current = Object
+
+		while Current and Current ~= LegacyGui do
+
+			if Current:IsA("GuiObject") and not Current.Visible then
+				return false
+			end
+
+			Current = Current.Parent
+
+		end
+
+		return true
+
+	end
+
+	-- Fire whatever handler the legacy menu put on a button.
+
+	local Press = function(Button: GuiButton)
+
+		for _, Signal in ipairs({ "Activated", "MouseButton1Click", "MouseButton1Down" }) do
+
+			local Fired = false
+
+			if getconnections then
+
+				pcall(function()
+
+					for _, Connection in ipairs(getconnections(Button[Signal])) do
+
+						if Connection.Function then
+							task.spawn(Connection.Function)
+						else
+							Connection:Fire()
+						end
+
+						Fired = true
+
+					end
+
+				end)
+
+			elseif firesignal then
+
+				Fired = pcall(firesignal, Button[Signal])
+
+			end
+
+			if Fired then
+				return true
+			end
+
+		end
+
+		return false
+
+	end
+
+	-- Player rows show the player's name (or display name)
+	-- somewhere inside the row frame. Only look two levels up so
+	-- buttons on other pages are never mistaken for a player row.
+
+	local FindRowPlayer = function(Button: GuiButton)
+
+		local Row = Button.Parent
+
+		for _ = 1, 2 do
+
+			if not Row or Row == LegacyGui then
+				return nil
+			end
+
+			for _, Player in ipairs(Players:GetPlayers()) do
+
+				if
+					Row.Name:find(Player.Name, 1, true)
+					or HasText(Row, Player.Name)
+					or HasText(Row, Player.DisplayName)
+					or HasText(Row, "@" .. Player.Name)
+				then
+					return Player
+				end
+
+			end
+
+			Row = Row.Parent
+
+		end
+
+		return nil
+
+	end
+
+	local IsFlag = function(Object: Instance)
+
+		if not Object:IsA("GuiButton") then
+			return false
+		end
+
+		local Name = Object.Name:lower()
+
+		if Name:find("tab") then
+			return false
+		end
+
+		if Name:find("report") then
+			return true
+		end
+
+		-- Fallback: the only text-less image button in a player row.
+
+		if Object:IsA("TextButton") and Object.Text ~= "" then
+			return false
+		end
+
+		for _, Descendant in ipairs(Object:GetDescendants()) do
+
+			local Text = GetText(Descendant)
+
+			if Text and Text ~= "" then
+				return false
+			end
+
+		end
+
+		return Object:IsA("ImageButton") or Object:FindFirstChildWhichIsA("ImageLabel") ~= nil
+
+	end
+
+	local FindReportTab = function()
+
+		local Fallback = nil
+
+		for _, Object in ipairs(LegacyGui:GetDescendants()) do
+
+			if Object:IsA("GuiButton") then
+
+				local Name = Object.Name:lower()
+
+				if Name:find("report") and Name:find("tab") then
+					return Object
+				end
+
+				if
+					not Fallback
+					and HasText(Object, "Report")
+					and Object.Parent
+					and Object.Parent:FindFirstChildWhichIsA("GuiButton")
+				then
+
+					for _, Sibling in ipairs(Object.Parent:GetChildren()) do
+
+						if Sibling ~= Object and Sibling:IsA("GuiButton") and HasText(Sibling, "Players") then
+							Fallback = Object
+							break
+						end
+
+					end
+
+				end
+
+			end
+
+		end
+
+		return Fallback
+
+	end
+
+	-- The settings row that owns a label such as "Which Player?".
+
+	local FindRow = function(LabelText: string)
+
+		for _, Object in ipairs(LegacyGui:GetDescendants()) do
+
+			if GetText(Object) == LabelText and IsShown(Object) then
+				return Object.Parent
+			end
+
+		end
+
+		return nil
+
+	end
+
+	local SelectPlayerMode = function()
+
+		local Row = FindRow("Game or Player?")
+
+		if not Row then
+			return
+		end
+
+		local Current = nil
+
+		for _, Object in ipairs(Row:GetDescendants()) do
+
+			local Text = GetText(Object)
+
+			if (Text == "Game" or Text == "Player") and IsShown(Object) then
+
+				local Parent = Object.Parent
+
+				if Parent and Parent:IsA("GuiObject") then
+
+					local Center = Object.AbsolutePosition.X + Object.AbsoluteSize.X / 2
+
+					local Left = Parent.AbsolutePosition.X
+
+					if Center >= Left and Center <= Left + Parent.AbsoluteSize.X then
+						Current = Text
+					end
+
+				end
+
+			end
+
+		end
+
+		if Current ~= "Game" then
+			return
+		end
+
+		local Right = Row:FindFirstChild("RightButton", true)
+
+		if Right and Right:IsA("GuiButton") then
+			Press(Right)
+		end
+
+	end
+
+	local SelectPlayer = function(Player: Player)
+
+		local Row = FindRow("Which Player?")
+
+		if not Row then
+			return
+		end
+
+		local DropDown = nil
+
+		for _, Object in ipairs(Row:GetDescendants()) do
+
+			if Object:IsA("GuiButton") then
+				DropDown = Object
+				break
+			end
+
+		end
+
+		if not DropDown then
+			return
+		end
+
+		Press(DropDown)
+
+		task.wait(0.15)
+
+		for _, Object in ipairs(LegacyGui:GetDescendants()) do
+
+			if
+				Object:IsA("GuiButton")
+				and Object ~= DropDown
+				and not Object:IsDescendantOf(Row)
+				and IsShown(Object)
+				and (HasText(Object, Player.Name) or HasText(Object, Player.DisplayName))
+			then
+				Press(Object)
+				return
+			end
+
+		end
+
+	end
+
+	local Report = function(Player: Player)
+
+		if Busy then
+			return
+		end
+
+		Busy = true
+
+		local Success = pcall(function()
+
+			local Tab = FindReportTab()
+
+			if not Tab or not Press(Tab) then
+				error("report tab unavailable")
+			end
+
+			task.wait(0.1)
+
+			SelectPlayerMode()
+
+			task.wait(0.1)
+
+			SelectPlayer(Player)
+
+		end)
+
+		if not Success then
+
+			pcall(function()
+				StarterGui:SetCore("SendNotification", {
+					Title = "Report",
+					Text = `Open the Report tab to report {Player.Name}`,
+					Duration = 5
+				})
+			end)
+
+		end
+
+		task.delay(0.5, function()
+			Busy = false
+		end)
+
+	end
+
+	local Hook = function(Object: Instance)
+
+		if Hooked[Object] or not IsFlag(Object) then
+			return
+		end
+
+		-- Rows can be filled in after the button is parented.
+
+		task.spawn(function()
+
+			for _ = 1, 10 do
+
+				if Hooked[Object] or not Object.Parent or FindRowPlayer(Object) then
+					break
+				end
+
+				task.wait(0.1)
+
+			end
+
+			if Hooked[Object] or not FindRowPlayer(Object) then
+				return
+			end
+
+			Hooked[Object] = true
+
+			Object.Activated:Connect(function()
+
+				local Player = FindRowPlayer(Object)
+
+				if Player and Player.Parent == Players then
+					Report(Player)
+				end
+
+			end)
+
+		end)
+
+	end
+
+	for _, Object in ipairs(LegacyGui:GetDescendants()) do
+		Hook(Object)
+	end
+
+	LegacyGui.DescendantAdded:Connect(Hook)
+
+end)
