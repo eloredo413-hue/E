@@ -2462,8 +2462,9 @@ end)
 -- "Add Friend" falls back to the friend request prompt when the
 -- legacy button didn't send a request.
 --
--- Entries in the Report tab's lists ("Which Player?", "Type Of
--- Abuse") go back from blue to grey when you let go, like in 2017.
+-- The Report tab's dropdowns ("Which Player?", "Type Of Abuse") and
+-- the entries in their lists go back from blue to grey when you let
+-- go, like in 2017.
 
 task.spawn(function()
 
@@ -2799,20 +2800,15 @@ task.spawn(function()
 
 	-- Pressed look
 	--
-	-- In 2017 an entry in a Report tab list turned blue only while your
-	-- finger was on it and went back to grey when you let go. The port
-	-- leaves it blue, so put the normal look back once a touch or
-	-- click ends.
+	-- In 2017 a dropdown (and each entry in its list) turned blue only
+	-- while your finger was on it and went back to grey when you let
+	-- go. The port leaves it blue, so put the normal image back once a
+	-- touch or click ends. Only the image and its tint are restored;
+	-- greyed-out states use transparency and are left alone.
 
 	local NormalLooks = setmetatable({}, { __mode = "k" })
 
-	local LookProperties = {
-		"Image",
-		"ImageColor3",
-		"ImageTransparency",
-		"BackgroundColor3",
-		"BackgroundTransparency",
-	}
+	local LookProperties = { "Image", "ImageColor3" }
 
 	local SaveLook = function(Button: GuiButton)
 
@@ -3189,7 +3185,8 @@ task.spawn(function()
 
 	end
 
-	-- List entries sit inside the dropdown's frames and show text.
+	-- Dropdowns and their list entries are named after (or sit inside)
+	-- the dropdown's frames and show text.
 
 	local HookListEntry = function(Object: Instance)
 
@@ -3207,7 +3204,14 @@ task.spawn(function()
 				return
 			end
 
-			local Current = Object.Parent
+			-- An untouched dropdown still says "Choose One".
+
+			if Text == "Choose One" then
+				SaveLook(Object)
+				return
+			end
+
+			local Current = Object
 
 			while Current and Current ~= LegacyGui do
 
