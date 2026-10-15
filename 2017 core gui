@@ -2444,11 +2444,17 @@ end)
 
 -- PLAYERS PAGE BUTTONS
 --
--- The report flags next to "Add Friend" on the Players tab do
--- nothing when tapped. Driving the legacy Report tab by firing its
--- button handlers left pages stuck on top of each other and the
--- player was never selected, so a flag now opens its own 2017-style
--- report dialog and never touches the legacy menu.
+-- Report flags:
+--
+--	* The legacy Players page adds a new flag to each row every time
+--	  the page is shown and never removes the old one. The stacked
+--	  copies make the flag look darker and darker, and every copy
+--	  keeps reacting while the page animates, which makes the menu
+--	  lag more each time it opens. Only one flag per row is kept.
+--
+--	* The flag's own handler does nothing. Tapping it now switches to
+--	  the Report tab, sets "Game or Player?" to Player and picks that
+--	  player, firing each button's click handler exactly once.
 --
 -- "Add Friend" falls back to the friend request prompt when the
 -- legacy button didn't send a request.
@@ -2459,18 +2465,7 @@ task.spawn(function()
 
 	local LocalPlayer = Players.LocalPlayer
 
-	local AbuseTypes = {
-		"Swearing",
-		"Inappropriate Username",
-		"Bullying",
-		"Scamming",
-		"Dating",
-		"Cheating/Exploiting",
-		"Personal Question",
-		"Offsite Links",
-	}
-
-	local ButtonColor = Color3.fromRGB(77, 82, 95)
+	local Busy = false
 
 	local GetText = function(Object: Instance)
 
@@ -2497,6 +2492,38 @@ task.spawn(function()
 		end
 
 		return false
+
+	end
+
+	-- The text a button shows itself, ignoring anything nested deeper.
+
+	local OwnText = function(Button: GuiButton)
+
+		if Button:IsA("TextButton") and Button.Text ~= "" then
+			return Button.Text
+		end
+
+		local Label = Button:FindFirstChildWhichIsA("TextLabel")
+
+		return Label and Label.Text or nil
+
+	end
+
+	local IsShown = function(Object: Instance)
+
+		local Current = Object
+
+		while Current and Current ~= LegacyGui do
+
+			if Current:IsA("GuiObject") and not Current.Visible then
+				return false
+			end
+
+			Current = Current.Parent
+
+		end
+
+		return Current == LegacyGui
 
 	end
 
@@ -2575,261 +2602,272 @@ task.spawn(function()
 
 	end
 
-	-- Report dialog
+	-- Stacked copies
 
-	local Dialog = nil
+	local RemoveDuplicateIcons = function(Flag: GuiButton)
 
-	local DialogPlayer = nil
+		local Seen = {}
 
-	local CloseDialog = function()
+		for _, Child in ipairs(Flag:GetChildren()) do
 
-		if Dialog then
-			Dialog:Destroy()
-		end
+			if Child:IsA("ImageLabel") then
 
-		Dialog = nil
+				local Key = Child.Name .. "|" .. Child.Image
 
-		DialogPlayer = nil
+				if Seen[Key] then
+					Seen[Key]:Destroy()
+				end
 
-	end
+				Seen[Key] = Child
 
-	local MakeLabel = function(Text: string, Properties: Properties, Parent: Instance)
-
-		local Label = Create("TextLabel", {
-			BackgroundTransparency = 1,
-			Font = Enum.Font.SourceSansBold,
-			Text = Text,
-			TextColor3 = Color3.new(1, 1, 1),
-			TextSize = 22,
-			TextXAlignment = Enum.TextXAlignment.Left,
-		}, false, Parent)
-
-		Set(Label, Properties)
-
-		return Label
-
-	end
-
-	local MakeButton = function(Text: string, Properties: Properties, Parent: Instance)
-
-		local Button = Create("TextButton", {
-			AutoButtonColor = true,
-			BackgroundColor3 = ButtonColor,
-			BorderSizePixel = 0,
-			Font = Enum.Font.SourceSansBold,
-			Text = Text,
-			TextColor3 = Color3.new(1, 1, 1),
-			TextSize = 22,
-		}, false, Parent)
-
-		Create("UICorner", { CornerRadius = UDim.new(0, 4) }, false, Button)
-
-		Set(Button, Properties)
-
-		return Button
-
-	end
-
-	local OpenDialog = function(Player: Player)
-
-		CloseDialog()
-
-		-- Draw above the legacy menu.
-
-		local Root =
-			LegacyGui:IsA("LayerCollector") and LegacyGui
-			or LegacyGui:FindFirstAncestorWhichIsA("LayerCollector")
-
-		local Gui = Create("ScreenGui", {
-			Name = "LegacyReportDialog",
-			DisplayOrder = ((Root and Root:IsA("ScreenGui")) and Root.DisplayOrder or 0) + 100,
-			IgnoreGuiInset = true,
-			ResetOnSpawn = false,
-			ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-		})
-
-		Dialog = Gui
-
-		DialogPlayer = Player
-
-		-- Keeps taps from reaching the menu underneath.
-
-		Create("TextButton", {
-			Name = "Shield",
-			AutoButtonColor = false,
-			BackgroundColor3 = Color3.new(0, 0, 0),
-			BackgroundTransparency = 0.5,
-			BorderSizePixel = 0,
-			Modal = true,
-			Size = UDim2.fromScale(1, 1),
-			Text = "",
-		}, false, Gui)
-
-		local Window = Create("Frame", {
-			Name = "Window",
-			Active = true,
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			BackgroundColor3 = Color3.fromRGB(30, 30, 30),
-			BackgroundTransparency = 0.1,
-			BorderSizePixel = 0,
-			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.new(0.9, 0, 0, 250),
-		}, false, Gui)
-
-		Create("UICorner", { CornerRadius = UDim.new(0, 6) }, false, Window)
-
-		Create("UISizeConstraint", { MaxSize = Vector2.new(460, 250) }, false, Window)
-
-		MakeLabel(`Report {Player.Name}`, {
-			Position = UDim2.new(0, 16, 0, 10),
-			Size = UDim2.new(1, -32, 0, 30),
-			TextSize = 26,
-			TextTruncate = Enum.TextTruncate.AtEnd,
-			TextXAlignment = Enum.TextXAlignment.Center,
-		}, Window)
-
-		-- Type Of Abuse
-
-		MakeLabel("Type Of Abuse", {
-			Position = UDim2.new(0, 16, 0, 56),
-			Size = UDim2.new(0.4, -24, 0, 36),
-		}, Window)
-
-		local Left = MakeButton("<", {
-			Position = UDim2.new(0.4, 0, 0, 56),
-			Size = UDim2.new(0, 36, 0, 36),
-		}, Window)
-
-		local Choice = MakeLabel("Choose One", {
-			Position = UDim2.new(0.4, 40, 0, 56),
-			Size = UDim2.new(0.6, -96, 0, 36),
-			TextSize = 20,
-			TextTruncate = Enum.TextTruncate.AtEnd,
-			TextXAlignment = Enum.TextXAlignment.Center,
-		}, Window)
-
-		local Right = MakeButton(">", {
-			Position = UDim2.new(1, -52, 0, 56),
-			Size = UDim2.new(0, 36, 0, 36),
-		}, Window)
-
-		-- Abuse Description
-
-		MakeLabel("Abuse Description", {
-			Position = UDim2.new(0, 16, 0, 106),
-			Size = UDim2.new(0.4, -24, 0, 36),
-		}, Window)
-
-		local Description = Create("TextBox", {
-			BackgroundColor3 = Color3.new(1, 1, 1),
-			BackgroundTransparency = 0.85,
-			BorderSizePixel = 0,
-			ClearTextOnFocus = false,
-			ClipsDescendants = true,
-			Font = Enum.Font.SourceSans,
-			PlaceholderColor3 = Color3.fromRGB(178, 178, 178),
-			PlaceholderText = "(Optional)",
-			Position = UDim2.new(0.4, 0, 0, 106),
-			Size = UDim2.new(0.6, -16, 0, 36),
-			Text = "",
-			TextColor3 = Color3.new(1, 1, 1),
-			TextSize = 20,
-			TextXAlignment = Enum.TextXAlignment.Left,
-		}, false, Window)
-
-		Create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, false, Description)
-
-		-- Cancel / Submit
-
-		local Cancel = MakeButton("Cancel", {
-			AnchorPoint = Vector2.new(0, 1),
-			Position = UDim2.new(0, 16, 1, -16),
-			Size = UDim2.new(0.5, -24, 0, 40),
-		}, Window)
-
-		local Submit = MakeButton("Submit", {
-			AnchorPoint = Vector2.new(1, 1),
-			Position = UDim2.new(1, -16, 1, -16),
-			Size = UDim2.new(0.5, -24, 0, 40),
-		}, Window)
-
-		local Index = 0
-
-		local Refresh = function()
-
-			Choice.Text = AbuseTypes[Index] or "Choose One"
-
-			Submit.AutoButtonColor = Index > 0
-
-			Submit.TextTransparency = (Index > 0) and 0 or 0.5
-
-		end
-
-		Refresh()
-
-		Left.Activated:Connect(function()
-
-			Index -= 1
-
-			if Index < 1 then
-				Index = #AbuseTypes
 			end
 
-			Refresh()
+		end
 
-		end)
+	end
 
-		Right.Activated:Connect(function()
+	-- Called on the newest flag in a row; older copies go.
 
-			Index = Index % #AbuseTypes + 1
+	local RemoveDuplicateFlags = function(Flag: GuiButton)
 
-			Refresh()
+		local Row = Flag.Parent
 
-		end)
+		if not Row then
+			return
+		end
 
-		Cancel.Activated:Connect(CloseDialog)
+		for _, Sibling in ipairs(Row:GetChildren()) do
 
-		Submit.Activated:Connect(function()
+			if
+				Sibling ~= Flag
+				and Sibling:IsA("GuiButton")
+				and (
+					Sibling.Name == Flag.Name
+					or (Sibling.Position == Flag.Position and Sibling.Size == Flag.Size)
+				)
+				and IsFlag(Sibling)
+			then
+				Sibling:Destroy()
+			end
 
-			if Index == 0 or Dialog ~= Gui then
+		end
+
+		RemoveDuplicateIcons(Flag)
+
+	end
+
+	-- Run a button's own click handler once, like a single tap.
+
+	local Click = function(Button: GuiButton)
+
+		for _, Signal in ipairs({ "MouseButton1Click", "Activated" }) do
+
+			local Fired = false
+
+			if getconnections then
+
+				pcall(function()
+
+					for _, Connection in ipairs(getconnections(Button[Signal])) do
+
+						if Connection.Function then
+
+							task.spawn(Connection.Function)
+
+							Fired = true
+
+						end
+
+					end
+
+				end)
+
+			elseif firesignal then
+
+				Fired = pcall(firesignal, Button[Signal])
+
+			end
+
+			if Fired then
+				return true
+			end
+
+		end
+
+		return false
+
+	end
+
+	local FindReportTab = function()
+
+		local Fallback = nil
+
+		for _, Object in ipairs(LegacyGui:GetDescendants()) do
+
+			if Object:IsA("GuiButton") then
+
+				local Name = Object.Name:lower()
+
+				if Name:find("report") and Name:find("tab") then
+					return Object
+				end
+
+				if not Fallback and HasText(Object, "Report") and Object.Parent then
+
+					for _, Sibling in ipairs(Object.Parent:GetChildren()) do
+
+						if Sibling ~= Object and Sibling:IsA("GuiButton") and HasText(Sibling, "Players") then
+							Fallback = Object
+							break
+						end
+
+					end
+
+				end
+
+			end
+
+		end
+
+		return Fallback
+
+	end
+
+	-- The settings row that owns a label such as "Game or Player?".
+
+	local WaitForRow = function(LabelText: string, Timeout: number)
+
+		local Start = os.clock()
+
+		repeat
+
+			for _, Object in ipairs(LegacyGui:GetDescendants()) do
+
+				if GetText(Object) == LabelText and IsShown(Object) then
+					return Object.Parent
+				end
+
+			end
+
+			task.wait(0.05)
+
+		until os.clock() - Start > Timeout
+
+		return nil
+
+	end
+
+	local SelectPlayerMode = function(Row: Instance)
+
+		local Current = nil
+
+		for _, Object in ipairs(Row:GetDescendants()) do
+
+			local Text = GetText(Object)
+
+			if (Text == "Game" or Text == "Player") and IsShown(Object) then
+
+				local Parent = Object.Parent
+
+				if Parent and Parent:IsA("GuiObject") then
+
+					local Center = Object.AbsolutePosition.X + Object.AbsoluteSize.X / 2
+
+					local Left = Parent.AbsolutePosition.X
+
+					if Center >= Left and Center <= Left + Parent.AbsoluteSize.X then
+						Current = Text
+					end
+
+				end
+
+			end
+
+		end
+
+		if Current ~= "Game" then
+			return
+		end
+
+		local Right = Row:FindFirstChild("RightButton", true)
+
+		if Right and Right:IsA("GuiButton") then
+			Click(Right)
+		end
+
+	end
+
+	-- Pick the player's entry in the "Which Player?" list directly,
+	-- without opening the list.
+
+	local SelectPlayer = function(Player: Player)
+
+		for _, Object in ipairs(LegacyGui:GetDescendants()) do
+
+			if Object:IsA("GuiButton") and OwnText(Object) == Player.Name then
+
+				local Current = Object.Parent
+
+				while Current and Current ~= LegacyGui do
+
+					if Current.Name:lower():find("dropdown") then
+						Click(Object)
+						return
+					end
+
+					Current = Current.Parent
+
+				end
+
+			end
+
+		end
+
+	end
+
+	local Report = function(Player: Player)
+
+		if Busy then
+			return
+		end
+
+		Busy = true
+
+		local Success = pcall(function()
+
+			local Tab = FindReportTab()
+
+			if not Tab or not Click(Tab) then
+				error("report tab unavailable")
+			end
+
+			-- Let the page finish sliding in before touching it.
+
+			task.wait(0.35)
+
+			local ModeRow = WaitForRow("Game or Player?", 1)
+
+			if not ModeRow then
 				return
 			end
 
-			local Reason = AbuseTypes[Index]
+			SelectPlayerMode(ModeRow)
 
-			local Message = Description.Text
+			task.wait(0.25)
 
-			CloseDialog()
-
-			local Success, Result = pcall(function()
-				Players:ReportAbuse(Player, Reason, Message)
-			end)
-
-			if Success then
-
-				Notify("Thanks for your report! Our moderators will review the chat logs and evaluate what happened.")
-
-			else
-
-				warn(`Report failed | {Result}`)
-
-				Notify("Your report couldn't be sent.")
-
-			end
+			SelectPlayer(Player)
 
 		end)
 
-		Gui.Parent = (Root and Root.Parent) or CoreGui
-
-	end
-
-	Players.PlayerRemoving:Connect(function(Player)
-
-		if Player == DialogPlayer then
-			CloseDialog()
+		if not Success then
+			Notify(`Open the Report tab to report {Player.Name}`)
 		end
 
-	end)
+		task.delay(0.5, function()
+			Busy = false
+		end)
+
+	end
 
 	-- Add Friend fallback
 
@@ -2882,7 +2920,7 @@ task.spawn(function()
 
 			end
 
-			if Hooked[Object] or not FindRowPlayer(Object) then
+			if Hooked[Object] or not Object.Parent or not FindRowPlayer(Object) then
 				return
 			end
 
@@ -2894,6 +2932,16 @@ task.spawn(function()
 
 			Hooked[Object] = true
 
+			if Flag then
+
+				RemoveDuplicateFlags(Object)
+
+				Object.ChildAdded:Connect(function()
+					task.defer(RemoveDuplicateIcons, Object)
+				end)
+
+			end
+
 			Object.Activated:Connect(function()
 
 				local Player = FindRowPlayer(Object)
@@ -2903,7 +2951,7 @@ task.spawn(function()
 				end
 
 				if Flag then
-					OpenDialog(Player)
+					Report(Player)
 				else
 					SendFriendRequest(Object, Player)
 				end
