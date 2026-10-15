@@ -2585,6 +2585,46 @@ task.spawn(function()
 
 	end
 
+	-- Only buttons on the escape menu's Players page count. That page
+	-- holds the "Leave Game" button. The top bar also shows your name
+	-- (next to "Account: 13+") but must never be touched.
+
+	local IsOnPlayersPage = function(Button: GuiButton)
+
+		local Current = Button.Parent
+
+		for _ = 1, 4 do
+
+			if not Current or Current == LegacyGui then
+				return false
+			end
+
+			if Current.Name:lower():find("topbar") then
+				return false
+			end
+
+			for _, Descendant in ipairs(Current:GetDescendants()) do
+
+				local Text = GetText(Descendant)
+
+				if Text and Text:sub(1, 8) == "Account:" then
+					return false
+				end
+
+			end
+
+			if HasText(Current, "Leave Game") then
+				return true
+			end
+
+			Current = Current.Parent
+
+		end
+
+		return false
+
+	end
+
 	-- The flag is the only icon-only button in a player row.
 
 	local IsFlag = function(Object: GuiButton)
@@ -2931,7 +2971,12 @@ task.spawn(function()
 
 			end
 
-			if Hooked[Object] or not Object.Parent or not FindRowPlayer(Object) then
+			if
+				Hooked[Object]
+				or not Object.Parent
+				or not FindRowPlayer(Object)
+				or not IsOnPlayersPage(Object)
+			then
 				return
 			end
 
