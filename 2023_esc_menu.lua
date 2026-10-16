@@ -55,7 +55,7 @@ do
 	if Env and Env.Settings2016Trace then
 		pcall(function() if writefile then writefile("Settings2016_trace.txt", "") end end)
 		Env.Settings2016TraceDump = function() return table.concat(TraceBuffer, "\n") end
-		Trace("trace started (menu build 2023-esc-v5.3)")
+		Trace("trace started (menu build 2023-esc-v5.4)")
 	end
 end
 MenuStartTick = tick()
@@ -85,7 +85,7 @@ end
 -- Lets you check which copy of this menu is running: print(getgenv().Settings2016Version)
 pcall(function()
 	local Env = getgenv and getgenv() or nil
-	if Env then Env.Settings2016Version = "2023-esc-v5.3" end
+	if Env then Env.Settings2016Version = "2023-esc-v5.4" end
 end)
 
 -- INVITE FRIENDS ROW TEXT SIZE (applies on every device)
@@ -4680,7 +4680,7 @@ ResizeHub = function()
 			or (IsTablet and math.min(TOTAL_HUB_WIDTH, math.max(280, LayoutViewport.X - 48)))
 			or math.max(280, math.floor(Viewport.X * 0.94))
 
-		local ConfirmationHeight = IsPhone and 240 or 280
+		local ConfirmationHeight = IsPhone and 130 or 280
 
 		Hub.HubBar.Visible = false
 		Hub.BottomButtonFrame.Visible = false
@@ -4690,7 +4690,7 @@ ResizeHub = function()
 		Hub.PageClipper.Size = UDim2.new(0, Width, 0, ConfirmationHeight)
 		Hub.PageClipper.Position =
 			IsPhone
-			and UDim2.new(0.5, -Width / 2 + TabletXOffset, 0.5, -ConfirmationHeight / 2)
+			and UDim2.new(0.5, -Width / 2 + TabletXOffset, 0.5, -ConfirmationHeight / 2 - 31)
 			or UDim2.new(0.5, -Width / 2, 0.5, -ConfirmationHeight / 2 + 75)
 
 		Hub.PageView.AnchorPoint = Vector2.new(0, 0)
@@ -5358,8 +5358,8 @@ LayoutTabs = function()
 				Page.Icon.ImageTransparency = Selected and 0 or 0.5
 				local Title = Page.Icon:FindFirstChild("Title")
 				if IsMobile then
-					local IconWidth = 32
-					local IconHeight = 32
+					local IconWidth = 28
+					local IconHeight = 28
 					local GroupGap = 2
 					local MinLeftInset = 2
 					local RightInset = 10
@@ -5379,12 +5379,23 @@ LayoutTabs = function()
 					local TitleWidth = MaxTitleWidth
 					local FittedTextSize = 12
 					if Title then
+						-- Measure with the label itself (its real font), never narrower than the
+						-- TextService estimate, plus a small margin: the text must never be cut off.
+						Title.TextWrapped = false
+						Title.TextScaled = false
+						local function MeasureTitle(Size)
+							Title.TextSize = Size
+							local Bounds = 0
+							pcall(function() Bounds = Title.TextBounds.X end)
+							local Estimate = GetMenuMeasuredTextWidth(Title, Title.Text, Size)
+							return math.max(Bounds, Estimate) * 1.05 + 4
+						end
 						local FoundFit = false
-						for CandidateSize = 20, 11, -1 do
-							local MeasuredWidth = GetMenuMeasuredTextWidth(Title, Title.Text, CandidateSize)
-							if MeasuredWidth + 2 <= MaxTitleWidth then
+						for CandidateSize = 17, 11, -1 do
+							local MeasuredWidth = MeasureTitle(CandidateSize)
+							if MeasuredWidth <= MaxTitleWidth then
 								FittedTextSize = CandidateSize
-								TitleWidth = math.max(18, math.ceil(MeasuredWidth + 2))
+								TitleWidth = math.max(18, math.ceil(MeasuredWidth))
 								FoundFit = true
 								break
 							end
@@ -5392,10 +5403,12 @@ LayoutTabs = function()
 						if not FoundFit then
 							TitleWidth = MaxTitleWidth
 							FittedTextSize = 11
+							pcall(function() Title.TextTruncate = Enum.TextTruncate.AtEnd end)
 						end
 					end
 					local GroupWidth = IconWidth + GroupGap + TitleWidth
-					local IconLeft = math.floor(TabWidth - RightInset - GroupWidth + 0.5)
+					-- icon + label sit together in the middle of their tab, like the 2021 menu
+					local IconLeft = math.floor((TabWidth - GroupWidth) / 2 + 0.5)
 					if IconLeft < MinLeftInset then IconLeft = MinLeftInset end
 					Page.Icon.Size = UDim2.fromOffset(IconWidth, IconHeight)
 					Page.Icon.Position = UDim2.new(0, IconLeft, 0.5, -IconHeight / 2)
@@ -8353,8 +8366,44 @@ Position =
 	local FriendButton
 	local FriendLabel
 
+	-- Names never run under the buttons: they shrink (down to size 10) to the room that is left
+	-- between the avatar and the left-most button.
+	local FitPlayerNames = function()
+		local LeftOffset = IsMobile and 80 or 60
+		local Reserve = 0
+		for _, Child in ipairs(Row:GetChildren()) do
+			if Child:IsA("GuiButton") and Child.Visible then
+				local X = Child.Position.X
+				if X.Scale == 1 and X.Offset < 0 then Reserve = math.max(Reserve, -X.Offset) end
+			end
+		end
+		if Reserve <= 0 then Reserve = 14 end
+		local Fit = function(Label, BaseSize, Height, CenterOffset)
+			if not (Label and Label:IsA("TextLabel")) then return end
+			local Width = UDim2.new(1, -(LeftOffset + Reserve + 10), 0, Height)
+			if Label.Size.X.Scale == 0 and Label.Size.X.Offset == 0 then
+				-- the original labels are 0x0 boxes: give them the room that is really there
+				Label.Size = Width
+				Label.Position = UDim2.new(0, LeftOffset, 0.5, CenterOffset - Height / 2)
+				Label.TextYAlignment = Enum.TextYAlignment.Center
+			end
+			Label.TextWrapped = false
+			Label.TextScaled = true
+			Label.TextXAlignment = Enum.TextXAlignment.Left
+			local Constraint = Label:FindFirstChildOfClass("UITextSizeConstraint")
+			if not Constraint then Constraint = Create("UITextSizeConstraint", {Parent = Label}) end
+			Constraint.MaxTextSize = BaseSize
+			Constraint.MinTextSize = 10
+		end
+		Fit(Row:FindFirstChild("DisplayNameLabel"), 36, 56, -10)
+		Fit(Row:FindFirstChild("NameLabel"), 24, 34, 12)
+	end
+
 	local PositionPlayerActionButtons = function(HasVoice)
-		if not CanTargetPlayer then return end
+		if not CanTargetPlayer then
+			FitPlayerNames()
+			return
+		end
 		local Right = 0
 		local Step = BUTTON_WIDTH + GAP
 		if FriendButton then
@@ -8372,6 +8421,7 @@ Position =
 		Place(ReportButton)
 		Place(ViewButton)
 		if HasVoice then Place(VoiceButton) end
+		FitPlayerNames()
 	end
 
 	if UserId > 1 then
@@ -13053,11 +13103,18 @@ BuildInviteRow =
 				TextXAlignment = Enum.TextXAlignment.Left,
 				Text = DisplayText,
 				TextWrapped = false,
+				TextScaled = true,
 				Size = USE_NEW_INVITE_MENU and UDim2.new(1, -184, 0, 26) or UDim2.new(1, -330, 0, 30),
 				Position = USE_NEW_INVITE_MENU and UDim2.new(0, 82, 0, 7) or UDim2.new(0, 60, 0, 5),
 				ZIndex = SETTINGS_BASE_ZINDEX + 3,
 			}
 		)
+		Create("UITextSizeConstraint", {
+			Name = "DisplayNameConstraint",
+			Parent = Row:FindFirstChild("DisplayName"),
+			MinTextSize = 10,
+			MaxTextSize = USE_NEW_INVITE_MENU and 22 or 24,
+		})
 
 		Create(
 			"TextLabel",
@@ -13071,11 +13128,18 @@ BuildInviteRow =
 				TextXAlignment = Enum.TextXAlignment.Left,
 				Text = "@" .. (Friend.Username or ""),
 				TextWrapped = false,
+				TextScaled = true,
 				Size = USE_NEW_INVITE_MENU and UDim2.new(1, -184, 0, 26) or UDim2.new(1, -330, 0, 22),
 				Position = USE_NEW_INVITE_MENU and UDim2.new(0, 60, 0, 29) or UDim2.new(0, 60, 0, 27),
 				ZIndex = SETTINGS_BASE_ZINDEX + 3,
 			}
 		)
+		Create("UITextSizeConstraint", {
+			Name = "UsernameConstraint",
+			Parent = Row:FindFirstChild("Username"),
+			MinTextSize = 10,
+			MaxTextSize = USE_NEW_INVITE_MENU and 22 or 17,
+		})
 
 		local StatusText, StatusColor =
 			GetInviteStatus(Friend)
@@ -17468,23 +17532,42 @@ PositionMobileConfirmationButtons =
 		end
 		local AvailableWidth = math.max(250, Viewport.X - 24)
 		local ButtonWidth = math.min(168, math.max(108, (AvailableWidth - 12) / 2))
+		-- Phones: the proportions of the 2021 menu's confirmation: a bigger message, wide buttons
+		-- a little further apart, all close together and slightly above the middle of the screen.
+		local PhoneConfirm = IsPhone
+		local ButtonGap, ButtonHeight, ButtonTop = 12, 48, 150
+		if PhoneConfirm then
+			local PanelWidth = tonumber(Hub.PageClipper.AbsoluteSize.X) or 0
+			if PanelWidth <= 0 then PanelWidth = Viewport.X - 32 end
+			ButtonGap, ButtonHeight, ButtonTop = 40, 50, 74
+			ButtonWidth = math.min(200, math.max(108, math.floor((PanelWidth - ButtonGap - 16) / 2)))
+		end
 		for _, Info in next, {
 			{ResetPage.Frame, ResetButton, DontResetButton},
 			{LeavePage.Frame, LeaveButton, DontLeaveButton},
 		} do
 			local Frame, LeftButton, RightButton = Info[1], Info[2], Info[3]
-			Frame.Size = UDim2.new(1, 0, 0, 240)
+			Frame.Size = UDim2.new(1, 0, 0, PhoneConfirm and 130 or 240)
 			local Message = Frame:FindFirstChildWhichIsA("TextLabel")
 			if Message then
-				Message.Size = UDim2.new(1, -24, 0, 88)
-				Message.Position = UDim2.new(0, 12, 0, 20)
-				Message.TextWrapped = true
-				Message.TextSize = 22
+				if PhoneConfirm then
+					Message.Size = UDim2.new(1, -24, 0, 62)
+					Message.Position = UDim2.new(0, 12, 0, 0)
+					Message.TextYAlignment = Enum.TextYAlignment.Center
+					Message.TextXAlignment = Enum.TextXAlignment.Center
+					Message.TextWrapped = true
+					Message.TextSize = 24
+				else
+					Message.Size = UDim2.new(1, -24, 0, 88)
+					Message.Position = UDim2.new(0, 12, 0, 20)
+					Message.TextWrapped = true
+					Message.TextSize = 22
+				end
 			end
-			LeftButton.Size = UDim2.new(0, ButtonWidth, 0, 48)
-			RightButton.Size = UDim2.new(0, ButtonWidth, 0, 48)
-			LeftButton.Position = UDim2.new(0.5, -(ButtonWidth + 6), 0, 150)
-			RightButton.Position = UDim2.new(0.5, 6, 0, 150)
+			LeftButton.Size = UDim2.new(0, ButtonWidth, 0, ButtonHeight)
+			RightButton.Size = UDim2.new(0, ButtonWidth, 0, ButtonHeight)
+			LeftButton.Position = UDim2.new(0.5, -(ButtonWidth + ButtonGap / 2), 0, ButtonTop)
+			RightButton.Position = UDim2.new(0.5, ButtonGap / 2, 0, ButtonTop)
 			for _, Button in ipairs({LeftButton, RightButton}) do
 				local Label = Button:FindFirstChildWhichIsA("TextLabel", true)
 				if Label then
@@ -17596,7 +17679,9 @@ PushPage =
 		Hub.PageView.ScrollBarThickness = 0
 		SwitchToPage(Page, true, true)
 		if Hub.InConfirmation then
-			if IsMobile then
+			if IsPhone then
+				ResizeHub()
+			elseif IsMobile then
 				-- Phones and tablets use mobile-style confirmation buttons at the bottom.
 				PositionMobileConfirmationButtons()
 			else
