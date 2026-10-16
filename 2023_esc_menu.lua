@@ -55,7 +55,7 @@ do
 	if Env and Env.Settings2016Trace then
 		pcall(function() if writefile then writefile("Settings2016_trace.txt", "") end end)
 		Env.Settings2016TraceDump = function() return table.concat(TraceBuffer, "\n") end
-		Trace("trace started (menu build 2023-esc-v5.6)")
+		Trace("trace started (menu build 2023-esc-v5.7)")
 	end
 end
 MenuStartTick = tick()
@@ -85,7 +85,7 @@ end
 -- Lets you check which copy of this menu is running: print(getgenv().Settings2016Version)
 pcall(function()
 	local Env = getgenv and getgenv() or nil
-	if Env then Env.Settings2016Version = "2023-esc-v5.6" end
+	if Env then Env.Settings2016Version = "2023-esc-v5.7" end
 end)
 
 -- INVITE FRIENDS ROW TEXT SIZE (applies on every device)
@@ -17471,7 +17471,7 @@ ResetButton, ResetButtonLabel =
 		"Reset",
 		UDim2.new(0, 200, 0, 50),
 		ResetCharacter,
-		true
+		not IsMobile -- on a touch screen it is gray like "Don't Reset" and blue only while pressed
 	)
 ResetButton.Parent = ResetPage.Frame
 ApplyResetButtonAvailability()
@@ -17506,7 +17506,7 @@ LeaveMessage = MakeText(
 )
 LeaveMessage.TextSize = 36
 
-LeaveButton = MakeStyledButton("LeaveGame", "Leave", UDim2.new(0, 200, 0, 50), LeaveGame, true)
+LeaveButton = MakeStyledButton("LeaveGame", "Leave", UDim2.new(0, 200, 0, 50), LeaveGame, not IsMobile)
 LeaveButton.Parent = LeavePage.Frame
 
 DontLeaveButton = MakeStyledButton(
@@ -19991,4 +19991,4 @@ end
 Api.Instance = Hub
 getgenv().Settings2016 = Api
 return Api
--- end of 2023_esc_menu.lua (2023-esc-v5.6)
+-- end of 2023_esc_menu.lua (2023-esc-v5.7)
