@@ -55,13 +55,13 @@ do
 	if Env and Env.Settings2016Trace then
 		pcall(function() if writefile then writefile("Settings2016_trace.txt", "") end end)
 		Env.Settings2016TraceDump = function() return table.concat(TraceBuffer, "\n") end
-		Trace("trace started (menu build 2023-esc-v3)")
+		Trace("trace started (menu build 2023-esc-v4)")
 	end
 end
 -- Lets you check which copy of this menu is running: print(getgenv().Settings2016Version)
 pcall(function()
 	local Env = getgenv and getgenv() or nil
-	if Env then Env.Settings2016Version = "2023-esc-v3" end
+	if Env then Env.Settings2016Version = "2023-esc-v4" end
 end)
 
 -- INVITE FRIENDS ROW TEXT SIZE (applies on every device)
@@ -4486,6 +4486,16 @@ ResizeHub = function()
 	if IsMobile and not IsTablet and TabletScale > 1 then
 		LayoutViewport = Vector2.new(Viewport.X / TabletScale, Viewport.Y / TabletScale)
 	end
+	-- Phones: keep the menu out of the camera cut-out / rounded corners, like the Roblox top bar.
+	local PhoneInsetL, PhoneInsetR = 0, 0
+	if IsPhone and GetPhoneSafeInsets then
+		PhoneInsetL, PhoneInsetR = GetPhoneSafeInsets()
+		local InsetScale = math.max(TabletScale, 1)
+		PhoneInsetL, PhoneInsetR = PhoneInsetL / InsetScale, PhoneInsetR / InsetScale
+		LastLayoutInsetL, LastLayoutInsetR = PhoneInsetL * InsetScale, PhoneInsetR * InsetScale
+		-- pages that are centred on the screen are centred in the safe area instead
+		TabletXOffset = (PhoneInsetL - PhoneInsetR) / 2
+	end
 
 	-- ========================================================
 	-- INVITE PAGE
@@ -4509,7 +4519,7 @@ ResizeHub = function()
 			-- normal ESC menu. Tablets keep a capped, PC-like width.
 
 			local PhonePageSideInset = 16
-			Width = math.max(1, math.min(TOTAL_HUB_WIDTH, math.floor(LayoutViewport.X - PhonePageSideInset * 2 + 0.5)))
+			Width = math.max(1, math.min(TOTAL_HUB_WIDTH, math.floor(LayoutViewport.X - PhoneInsetL - PhoneInsetR - PhonePageSideInset * 2 + 0.5)))
 
 			-- Keep the invite page below the camera/notch region while the HubBar
 			-- itself remains edge-to-edge.
@@ -4638,7 +4648,7 @@ ResizeHub = function()
 		-- ====================================================
 
 		local Width = IsPhone
-			and math.max(1, math.min(800, math.floor(LayoutViewport.X - 32 + 0.5)))
+			and math.max(1, math.min(800, math.floor(LayoutViewport.X - PhoneInsetL - PhoneInsetR - 32 + 0.5)))
 			or (IsTablet and math.min(TOTAL_HUB_WIDTH, math.max(280, LayoutViewport.X - 48)))
 			or math.max(280, math.floor(Viewport.X * 0.94))
 
@@ -4789,33 +4799,34 @@ ResizeHub = function()
 		Hub.MenuContainer.AnchorPoint = Vector2.new(0, 0)
 		local PhoneBarSideInset = 8
 		local PhonePageSideInset = 16
-		local Width = math.max(1, math.floor(LayoutViewport.X - PhonePageSideInset * 2 + 0.5))
+		local Width = math.max(1, math.floor(LayoutViewport.X - PhoneInsetL - PhoneInsetR - PhonePageSideInset * 2 + 0.5))
 
 		local GroupTop = SYSTEM_MENU_SIZE.Y + MOBILE_MENU_GAP
 		local MobileBarHeight = math.max(44, MOBILE_HUBBAR_HEIGHT)
 
+		-- The page starts right under the tab bar and ends a little above the bottom edge. It used
+		-- to be centred on the screen with a +60 offset, which pushed its bottom edge past the
+		-- screen on short phone screens (rows and settings were cut off).
+		local PageTop = GroupTop + MobileBarHeight + 5
 		local PageHeight =
 			math.max(
 				100,
-				math.floor((LayoutViewport.Y * 0.95) - 45 + 0.5)
+				math.floor(LayoutViewport.Y - PageTop - 8 + 0.5)
 			)
-
-		local PageCenterYOffset =
-			(-PageHeight / 2) + 60
 
 		Height =
 			PageHeight
 
 		Hub.HubBar.AnchorPoint = Vector2.new(0, 0)
-		Hub.HubBar.Size = UDim2.new(1, -(PhoneBarSideInset * 2), 0, MobileBarHeight)
-		Hub.HubBar.Position = UDim2.new(0, PhoneBarSideInset, 0, GroupTop)
+		Hub.HubBar.Size = UDim2.new(1, -(PhoneBarSideInset * 2 + PhoneInsetL + PhoneInsetR), 0, MobileBarHeight)
+		Hub.HubBar.Position = UDim2.new(0, PhoneBarSideInset + PhoneInsetL, 0, GroupTop)
 
 		Hub.HubBarContainer.Size = UDim2.new(1, 0, 1, 0)
 		Hub.HubBarContainer.Position = UDim2.new(0, 0, 0, 0)
 		if Hub.HubBarContainerLayout then Hub.HubBarContainerLayout.Parent = Hub.HubBarContainer end
 
-		Hub.PageClipper.Size = UDim2.new(1, -(PhonePageSideInset * 2), 0, PageHeight)
-		Hub.PageClipper.Position = UDim2.new(0, PhonePageSideInset, 0.5, PageCenterYOffset)
+		Hub.PageClipper.Size = UDim2.new(1, -(PhonePageSideInset * 2 + PhoneInsetL + PhoneInsetR), 0, PageHeight)
+		Hub.PageClipper.Position = UDim2.new(0, PhonePageSideInset + PhoneInsetL, 0, PageTop)
 
 		-- The fixed PC button frame is NEVER used on mobile.
 		Hub.BottomButtonFrame.Visible = false
@@ -18484,6 +18495,92 @@ NativeCloseRunning = false
 NativeStuckSince = nil
 NativeWatchdogAttempts = 0
 
+-- A zero-size frame at our own (0,0): the origin of this ScreenGui's coordinates.
+GetOriginProbe =
+	function()
+		local Probe = NativeIconOriginProbe
+		if Probe and Probe.Parent then return Probe end
+		if not ScreenGui or not ScreenGui.Parent then return nil end
+		Probe = Create("Frame", {
+			Name = "OriginProbe",
+			Parent = ScreenGui,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Active = false,
+			Size = UDim2.fromOffset(0, 0),
+			Position = UDim2.fromOffset(0, 0),
+		})
+		NativeIconOriginProbe = Probe
+		NativeIconOriginProbeStamp = tick()
+		return Probe
+	end
+
+-- Left/right device safe area (camera cut-out, rounded corners) of a phone, in this
+-- ScreenGui's pixels.  This menu's ScreenGui ignores the safe area (so the dark backdrop
+-- fills the screen); a second, invisible ScreenGui that DOES respect it is measured.
+SafeInsetL = 0
+SafeInsetR = 0
+LastLayoutInsetL = 0
+LastLayoutInsetR = 0
+SafeAreaProbeGui = nil
+SafeAreaProbeFrame = nil
+SafeAreaProbeStamp = 0
+SafeAreaProbeFailed = false
+GetPhoneSafeInsets =
+	function()
+		if not IsPhone or SafeAreaProbeFailed or SafeFlag("NoSafeInsets") then return 0, 0 end
+		local Origin = GetOriginProbe()
+		if not Origin then return SafeInsetL, SafeInsetR end
+		if not (SafeAreaProbeFrame and SafeAreaProbeFrame.Parent) then
+			local Ok = pcall(function()
+				SafeAreaProbeGui = Create("ScreenGui", {
+					Name = "Settings2016SafeAreaProbe",
+					Parent = CoreGui,
+					DisplayOrder = -100,
+					IgnoreGuiInset = true,
+					ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets,
+					ResetOnSpawn = false,
+				})
+				Insert(Data.Objects, SafeAreaProbeGui)
+				SafeAreaProbeFrame = Create("Frame", {
+					Parent = SafeAreaProbeGui,
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					Active = false,
+					Size = UDim2.fromScale(1, 1),
+				})
+			end)
+			SafeAreaProbeStamp = tick()
+			if not Ok then
+				-- this client cannot do it: stop trying and leave nothing behind
+				SafeAreaProbeFrame = nil
+				SafeAreaProbeFailed = true
+				if SafeAreaProbeGui then pcall(function() SafeAreaProbeGui:Destroy() end) end
+				SafeAreaProbeGui = nil
+			end
+			return SafeInsetL, SafeInsetR
+		end
+		-- freshly created frames may not have a laid-out position yet
+		if tick() - SafeAreaProbeStamp < 0.2 or tick() - NativeIconOriginProbeStamp < 0.2 then
+			return SafeInsetL, SafeInsetR
+		end
+		local Ok, Left, Right, Full = pcall(function()
+			local Position, Size, OriginPosition = SafeAreaProbeFrame.AbsolutePosition, SafeAreaProbeFrame.AbsoluteSize, Origin.AbsolutePosition
+			local FullWidth = ScreenGui.AbsoluteSize.X
+			return Position.X - OriginPosition.X, (OriginPosition.X + FullWidth) - (Position.X + Size.X), FullWidth
+		end)
+		if Ok and type(Left) == "number" and type(Right) == "number" and type(Full) == "number" then
+			if Left >= 0 and Right >= 0 and Left <= 150 and Right <= 150 and Full > 0 and (Left + Right) < Full * 0.3 then
+				local NewLeft, NewRight = math.floor(Left + 0.5), math.floor(Right + 0.5)
+				if NewLeft ~= SafeInsetL or NewRight ~= SafeInsetR then
+					SafeInsetL, SafeInsetR = NewLeft, NewRight
+					Trace(string.format("phone safe area: left=%d right=%d", NewLeft, NewRight))
+				end
+			end
+		end
+		return SafeInsetL, SafeInsetR
+	end
+
 FindNativeMenuIconObject =
 	function()
 		local Root = CoreGui:FindFirstChild("TopBarApp")
@@ -18519,20 +18616,8 @@ MeasureNativeMenuIcon =
 			NativeMenuIconObject = Hit
 		end
 		if not Hit then return NativeMenuIconRect end
-		local Probe = NativeIconOriginProbe
-		if not (Probe and Probe.Parent) then
-			Probe = Create("Frame", {
-				Name = "OriginProbe",
-				Parent = ScreenGui,
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				Active = false,
-				Size = UDim2.fromOffset(0, 0),
-				Position = UDim2.fromOffset(0, 0),
-			})
-			NativeIconOriginProbe = Probe
-			NativeIconOriginProbeStamp = tick()
-		end
+		local Probe = GetOriginProbe()
+		if not Probe then return NativeMenuIconRect end
 		-- A frame that was just created may not have a laid-out position yet.
 		if tick() - NativeIconOriginProbeStamp < 0.2 then return NativeMenuIconRect end
 		-- The button itself, then the frames around it: whichever has a believable size.
@@ -19161,6 +19246,14 @@ Spawn(function()
 			AlignSystemMenuButton()
 			PositionRecorderGui()
 			if NativeMenuIconObject then HookNativeIcon(NativeMenuIconObject) end
+			-- the safe area becomes known a moment after start-up and changes on rotation
+			if IsPhone then
+				local InsetL, InsetR = GetPhoneSafeInsets()
+				if math.abs(InsetL - LastLayoutInsetL) > 0.5 or math.abs(InsetR - LastLayoutInsetR) > 0.5 then
+					LastLayoutInsetL, LastLayoutInsetR = InsetL, InsetR
+					ResizeHub()
+				end
+			end
 			SystemMenuWatchdog()
 		end)
 		if not Ok then Trace("align loop error: " .. tostring(Err)) end
