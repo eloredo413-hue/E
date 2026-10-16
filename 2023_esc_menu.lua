@@ -55,13 +55,13 @@ do
 	if Env and Env.Settings2016Trace then
 		pcall(function() if writefile then writefile("Settings2016_trace.txt", "") end end)
 		Env.Settings2016TraceDump = function() return table.concat(TraceBuffer, "\n") end
-		Trace("trace started (menu build 2023-esc-v5)")
+		Trace("trace started (menu build 2023-esc-v5.1)")
 	end
 end
 -- Lets you check which copy of this menu is running: print(getgenv().Settings2016Version)
 pcall(function()
 	local Env = getgenv and getgenv() or nil
-	if Env then Env.Settings2016Version = "2023-esc-v5" end
+	if Env then Env.Settings2016Version = "2023-esc-v5.1" end
 end)
 
 -- INVITE FRIENDS ROW TEXT SIZE (applies on every device)
@@ -18590,12 +18590,19 @@ IsOwnGuiObject =
 		for _ = 1, 40 do
 			if not Current or Current == CoreGui then return false end
 			local Name = Current.Name
-			if type(Name) == "string" and (Name:sub(1, 12) == "Settings2016" or Name:sub(1, 10) == "LegacyChat") then
+			if type(Name) == "string" and (Name:sub(1, 12) == "Settings2016" or Name:sub(1, 10) == "LegacyChat" or Name:lower():find("chat", 1, true)) then
 				return true
 			end
 			Current = Current.Parent
 		end
-		return false
+		-- the old chat controller puts its icon INSIDE the Roblox chat button: that is not the logo
+		local HasChatIcon = false
+		pcall(function()
+			for _, Child in ipairs(Object:GetDescendants()) do
+				if Child.Name:sub(1, 10) == "LegacyChat" then HasChatIcon = true break end
+			end
+		end)
+		return HasChatIcon
 	end
 
 -- When nothing usable sits at the expected path: the Roblox logo is the FIRST button of the
