@@ -55,7 +55,7 @@ do
 	if Env and Env.Settings2016Trace then
 		pcall(function() if writefile then writefile("Settings2016_trace.txt", "") end end)
 		Env.Settings2016TraceDump = function() return table.concat(TraceBuffer, "\n") end
-		Trace("trace started (menu build 2023-esc-v5.4)")
+		Trace("trace started (menu build 2023-esc-v5.5)")
 	end
 end
 MenuStartTick = tick()
@@ -85,7 +85,7 @@ end
 -- Lets you check which copy of this menu is running: print(getgenv().Settings2016Version)
 pcall(function()
 	local Env = getgenv and getgenv() or nil
-	if Env then Env.Settings2016Version = "2023-esc-v5.4" end
+	if Env then Env.Settings2016Version = "2023-esc-v5.5" end
 end)
 
 -- INVITE FRIENDS ROW TEXT SIZE (applies on every device)
@@ -19437,6 +19437,11 @@ AlignSystemMenuButton =
 			return
 		end
 
+		-- The visual X exists only while the menu is open or sliding closed. After the
+		-- tween SetVisibility/FinishCustomMenuClose hides it; only the hit-box stays.
+		-- Decided first: nothing that can fail below (the geometry) may leave the X on screen.
+		SystemMenuButton.Visible = (Hub.Visible == true) or (SystemMenuButtonClosing == true)
+
 		-- The X follows the native top-left button; the invisible hit-box always covers it.
 		local Geometry = GetSystemMenuGeometry()
 		SystemMenuButton.Position = UDim2.fromOffset(Geometry.ButtonX, Geometry.ButtonY)
@@ -19444,9 +19449,6 @@ AlignSystemMenuButton =
 		pcall(function()
 			SystemMenuButton.ImageTransparency = 0
 		end)
-		-- The visual X exists only while the menu is open or sliding closed. After the
-		-- tween SetVisibility/FinishCustomMenuClose hides it; only the hit-box stays.
-		SystemMenuButton.Visible = (Hub.Visible == true) or (SystemMenuButtonClosing == true)
 		if SystemMenuHitbox then
 			SystemMenuHitbox.Visible = true
 			SystemMenuHitbox.Position = UDim2.fromOffset(Geometry.HitX, Geometry.HitY)
@@ -19505,16 +19507,30 @@ Connect(CoreGui.DescendantAdded, function(Descendant)
 		end)
 	end
 end)
+AlignLoopErrors = 0
+AlignLoopLastError = nil
 Spawn(function()
 	-- Capture the original button so this worker ends when this run is cleaned up.
 	local WorkerSystemMenuButton = SystemMenuButton
+	-- Every step of a pass is guarded on its own: an error in one step (which can repeat on every
+	-- pass) used to stop the steps after it, the watchdog among them (the X then stayed on screen
+	-- and the top bar stayed stuck).
+	local function Step(Name, Fn)
+		local StepOk, StepErr = pcall(Fn)
+		if not StepOk then
+			AlignLoopErrors = AlignLoopErrors + 1
+			AlignLoopLastError = Name .. ": " .. tostring(StepErr)
+			Trace("align loop error in " .. AlignLoopLastError)
+		end
+	end
 	while WorkerSystemMenuButton and WorkerSystemMenuButton.Parent do
-		-- An error in one pass used to end this loop for good (the X then stayed on screen).
-		local Ok, Err = pcall(function()
-			AlignSystemMenuButton()
-			PositionRecorderGui()
+		Step("align", AlignSystemMenuButton)
+		Step("recorder", function() PositionRecorderGui() end)
+		Step("hook", function()
 			if NativeMenuIconObject then HookNativeIcon(NativeMenuIconObject) end
-			-- the safe area becomes known a moment after start-up and changes on rotation
+		end)
+		-- the safe area becomes known a moment after start-up and changes on rotation
+		Step("insets", function()
 			if IsPhone then
 				local InsetL, InsetR = GetPhoneSafeInsets()
 				if math.abs(InsetL - LastLayoutInsetL) > 0.5 or math.abs(InsetR - LastLayoutInsetR) > 0.5 then
@@ -19522,9 +19538,8 @@ Spawn(function()
 					ResizeHub()
 				end
 			end
-			SystemMenuWatchdog()
 		end)
-		if not Ok then Trace("align loop error: " .. tostring(Err)) end
+		Step("watchdog", SystemMenuWatchdog)
 		Wait(0.25)
 	end
 end)
@@ -19866,6 +19881,56 @@ function Api:GetVisibility()
 	return Hub.Visible
 end
 
+-- One line saying what the menu thinks is going on.  The loader shows it on screen (a small status
+-- line), so a screenshot or recording of a problem also tells which build runs and in what state.
+function Api:GetStatus()
+	local Parts = {}
+	local function Add(Text) Parts[#Parts + 1] = Text end
+	local function YesNo(Value) return Value and "Y" or "N" end
+	pcall(function()
+		local Env = getgenv and getgenv()
+		Add(tostring(Env and Env.Settings2016Version or "?"))
+	end)
+	pcall(function()
+		local Camera = workspace.CurrentCamera
+		local Size = Camera and Camera.ViewportSize or Vector2.new(0, 0)
+		local Kind = IsPhone and "phone" or (IsTablet and "tablet" or (IsMobile and "mobile" or "pc"))
+		Add(string.format("%s %.0fx%.0f", Kind, Size.X, Size.Y))
+		if IsPhone then
+			Add(string.format("safe %.0f/%.0f%s", SafeInsetL, SafeInsetR, SafeAreaProbeFailed and "!" or ""))
+		end
+	end)
+	pcall(function()
+		Add(string.format("open:%s%s", YesNo(Hub.Visible), SystemMenuButtonClosing == true and "(closing)" or ""))
+	end)
+	pcall(function()
+		local NativeHub = GetNativeHubVisible()
+		Add(string.format("native:%s(hub:%s)", YesNo(NativeMenuIsOpen()), NativeHub == nil and "?" or YesNo(NativeHub)))
+	end)
+	pcall(function()
+		local Root = CoreGui:FindFirstChild("TopBarApp")
+		local App = Root and Root:FindFirstChild("TopBarApp")
+		local Enabled = nil
+		if App then pcall(function() Enabled = App.Enabled end) end
+		if Enabled == nil and Root then pcall(function() Enabled = Root.Enabled end) end
+		Add("bar:" .. (Enabled == nil and "?" or (Enabled and "on" or "off")))
+	end)
+	pcall(function()
+		Add(string.format("X:%s tap:%s", (SystemMenuButton and SystemMenuButton.Visible) and "on" or "off", (SystemMenuHitbox and SystemMenuHitbox.Visible) and "on" or "off"))
+	end)
+	pcall(function()
+		Add(string.format("prompt:%s byRoblox:%s closing:%s", YesNo(Hub.PromptHold == true), YesNo(Hub.OpenedByNative == true), YesNo(NativeCloseRunning == true)))
+	end)
+	pcall(function()
+		if (AlignLoopErrors or 0) > 0 then
+			Add(string.format("LOOP ERRORS x%d: %s", AlignLoopErrors, tostring(AlignLoopLastError):sub(1, 90)))
+		else
+			Add("loop:ok")
+		end
+	end)
+	return table.concat(Parts, " | ")
+end
+
 function Api:ReportPlayer(Player)
 	if OpenReportPlayer then OpenReportPlayer(Player) end
 end
@@ -19873,3 +19938,4 @@ end
 Api.Instance = Hub
 getgenv().Settings2016 = Api
 return Api
+-- end of 2023_esc_menu.lua (2023-esc-v5.5)
