@@ -55,13 +55,37 @@ do
 	if Env and Env.Settings2016Trace then
 		pcall(function() if writefile then writefile("Settings2016_trace.txt", "") end end)
 		Env.Settings2016TraceDump = function() return table.concat(TraceBuffer, "\n") end
-		Trace("trace started (menu build 2023-esc-v5.2)")
+		Trace("trace started (menu build 2023-esc-v5.3)")
 	end
+end
+MenuStartTick = tick()
+TopLeftDumped = false
+-- Trace only: what is in the top-left corner of the Roblox top bar, so a trace shows the real layout.
+DumpTopLeftToTrace = function()
+	local Env = getgenv and getgenv() or nil
+	if not (Env and Env.Settings2016Trace) then return end
+	pcall(function()
+		local Root = game:GetService("CoreGui"):FindFirstChild("TopBarApp")
+		if not Root then Trace("top-left dump: no CoreGui.TopBarApp") return end
+		local Probe = GetOriginProbe and GetOriginProbe()
+		local Origin = Probe and Probe.AbsolutePosition or Vector2.new(0, 0)
+		Trace(string.format("top-left dump: safe inset L=%s R=%s, viewport %s", tostring(SafeInsetL), tostring(SafeInsetR), tostring(ScreenGui and ScreenGui.AbsoluteSize)))
+		local Lines = 0
+		for _, Object in ipairs(Root:GetDescendants()) do
+			if Object:IsA("GuiObject") and Lines < 70 then
+				local Position, Size = Object.AbsolutePosition, Object.AbsoluteSize
+				if Position.X - Origin.X < 420 and Position.Y - Origin.Y < 90 and Size.X > 0 and Size.X < 260 and Object.Visible then
+					Lines = Lines + 1
+					Trace(string.format("  %s %s x=%.0f y=%.0f w=%.0f h=%.0f", Object.ClassName, Object:GetFullName():gsub("^.-TopBarApp%.", ""), Position.X - Origin.X, Position.Y - Origin.Y, Size.X, Size.Y))
+				end
+			end
+		end
+	end)
 end
 -- Lets you check which copy of this menu is running: print(getgenv().Settings2016Version)
 pcall(function()
 	local Env = getgenv and getgenv() or nil
-	if Env then Env.Settings2016Version = "2023-esc-v5.2" end
+	if Env then Env.Settings2016Version = "2023-esc-v5.3" end
 end)
 
 -- INVITE FRIENDS ROW TEXT SIZE (applies on every device)
@@ -426,6 +450,10 @@ TABLET_HUBBAR_HEIGHT = 48
 SYSTEM_MENU_OFFSET_X = 16
 SYSTEM_MENU_OFFSET_Y = 4
 MOBILE_SYSTEM_MENU_OFFSET_X = 16
+-- Phones: centre of the Roblox logo, measured from the left safe-area edge / the screen top
+-- (read off a screen recording of the real top bar; the logo is its first icon).
+PHONE_LOGO_CENTER_X = 30
+PHONE_LOGO_CENTER_Y = 18
 GetSystemMenuButtonOffsetX = function()
 	local Geometry = GetSystemMenuGeometry and GetSystemMenuGeometry() or nil
 	if Geometry then return Geometry.ButtonX end
@@ -13526,7 +13554,7 @@ SyncTopBarAppVisibility =
 		elseif SystemMenuButtonClosing == true then
 			SetTopBarAppEnabled(false)
 		else
-			SetTopBarAppEnabled(true)
+			SetTopBarAppEnabled(not (Hub and Hub.PromptHold == true))
 		end
 		if RefreshVoiceBetaBadgeVisibility then RefreshVoiceBetaBadgeVisibility() end
 	end
@@ -18613,7 +18641,7 @@ FindNativeMenuIconByGeometry =
 		local Root = CoreGui:FindFirstChild("TopBarApp")
 		local Probe = GetOriginProbe()
 		if not Root or not Probe then return nil end
-		local Best, BestX = nil, nil
+		local Found = {}
 		local Ok = pcall(function()
 			local Origin = Probe.AbsolutePosition
 			local EdgeLeft = (IsPhone and SafeInsetL) or 0
@@ -18624,13 +18652,23 @@ FindNativeMenuIconByGeometry =
 					if Size.X >= 28 and Size.X <= 64 and Size.Y >= 28 and Size.Y <= 64
 						and X >= EdgeLeft - 6 and X <= EdgeLeft + 32 and Y >= -30 and Y <= 70
 					then
-						if not Best or X < BestX then Best, BestX = Object, X end
+						table.insert(Found, {Object = Object, X = X + Size.X / 2, Y = Y + Size.Y / 2, Area = Size.X * Size.Y})
 					end
 				end
 			end
 		end)
-		if Ok then return Best end
-		return nil
+		if not Ok or #Found == 0 then return nil end
+		-- Several buttons may be layers of the same logo (same place): take the biggest of them.
+		-- Buttons at different places mean this is a guess between candidates: don't.
+		local Biggest = Found[1]
+		for _, Candidate in ipairs(Found) do
+			if math.abs(Candidate.X - Found[1].X) > 8 or math.abs(Candidate.Y - Found[1].Y) > 8 then
+				Trace("native menu icon: " .. tostring(#Found) .. " different candidates in the corner, not guessing")
+				return nil
+			end
+			if Candidate.Area > Biggest.Area then Biggest = Candidate end
+		end
+		return Biggest.Object
 	end
 
 FindNativeMenuIconObject =
@@ -18721,6 +18759,23 @@ GetSystemMenuGeometry =
 			ButtonX = LegacyX, ButtonY = LegacyY,
 			HitX = LegacyX - 4, HitY = LegacyY - 4, HitW = 40, HitH = 40,
 		}
+		if IsPhone and not SafeAreaProbeFailed and not SafeFlag("NoLogoAnchor") then
+			-- The logo sits one fixed distance inside the camera cut-out.  Placing the X and the
+			-- tap area from that does not depend on finding Roblox's own button (whose name and
+			-- place change between builds), so they never jump around.
+			local InsetL = 0
+			if GetPhoneSafeInsets then
+				local InsetOk, Left = pcall(GetPhoneSafeInsets)
+				if InsetOk and type(Left) == "number" then InsetL = Left end
+			end
+			local CenterX, CenterY = InsetL + PHONE_LOGO_CENTER_X, PHONE_LOGO_CENTER_Y
+			Geometry.ButtonX = math.floor(CenterX - 15 + 0.5)
+			Geometry.ButtonY = math.floor(CenterY - 15 + 0.5)
+			Geometry.HitW, Geometry.HitH = 46, 44
+			Geometry.HitX = math.floor(CenterX - Geometry.HitW / 2 + 0.5)
+			Geometry.HitY = math.floor(CenterY - Geometry.HitH / 2 + 0.5)
+			return Geometry
+		end
 		local Rect = MeasureNativeMenuIcon()
 		if Rect then
 			local Covered =
@@ -18752,6 +18807,38 @@ NativeMenuIsOpen =
 	function()
 		local Ok, Open = pcall(function() return GuiService.MenuIsOpen end)
 		return Ok and Open == true
+	end
+
+-- Is Roblox's SETTINGS menu (not some prompt or other menu) the open one?  true / false, or nil
+-- when the client does not tell us (the settings module cannot be required).
+GetNativeHubVisible =
+	function()
+		local Result = nil
+		pcall(function()
+			local RobloxGui = CoreGui:FindFirstChild("RobloxGui")
+			local Modules = RobloxGui and RobloxGui:FindFirstChild("Modules")
+			local SettingsFolder = Modules and Modules:FindFirstChild("Settings")
+			local HubModule = SettingsFolder and SettingsFolder:FindFirstChild("SettingsHub")
+			if not HubModule then return end
+			local Loaded = require(HubModule)
+			if type(Loaded) ~= "table" then return end
+			local Visible = Loaded.Visible
+			if Visible == nil and type(Loaded.GetVisibility) == "function" then
+				Visible = Loaded:GetVisibility()
+			end
+			if type(Visible) == "boolean" then Result = Visible end
+		end)
+		return Result
+	end
+
+-- A Roblox prompt (Favorite Item ...) or another menu keeps MenuIsOpen true while the settings
+-- menu is closed and ours is not showing: the top bar would show a lone X.
+IsPromptHoldingMenu =
+	function()
+		if not Hub or Hub.Visible or SystemMenuButtonClosing == true then return false end
+		if Hub.OpenedByNative == true or Hub.NativeMuteTransaction or NativeCloseRunning then return false end
+		if not NativeMenuIsOpen() then return false end
+		return GetNativeHubVisible() == false
 	end
 
 -- Fires a signal of the native menu icon the way a tap would (all Lua handlers connected to it).
@@ -18953,8 +19040,24 @@ SystemMenuWatchdog =
 			NativeStuckSince = nil
 			return
 		end
-		-- 2. fully closed: the Roblox top bar must be on
-		SetTopBarAppEnabled(true)
+		if not TopLeftDumped and tick() - MenuStartTick > 6 then
+			TopLeftDumped = true
+			DumpTopLeftToTrace()
+		end
+		-- 2. fully closed: the Roblox top bar must be on (unless a Roblox prompt holds MenuIsOpen:
+		--    the bar would show nothing but an X until the prompt is answered)
+		local Holding = false
+		if IsPromptHoldingMenu() then
+			Hub.PromptSince = Hub.PromptSince or Now
+			Holding = Now - Hub.PromptSince >= 0.6 and Now - Hub.PromptSince < 120
+		else
+			Hub.PromptSince = nil
+		end
+		if Holding ~= (Hub.PromptHold == true) then
+			Trace(Holding and "a Roblox prompt is open: top bar hidden until it is answered" or "prompt gone: top bar back")
+		end
+		Hub.PromptHold = Holding
+		SetTopBarAppEnabled(not Holding)
 		-- 3. Roblox's own menu is still open behind the closed custom one (top bar stuck on "X")
 		if NativeMenuIsOpen() and not NativeCloseRunning and Now >= (Hub.SuppressNativeOpenUntil or 0) then
 			NativeStuckSince = NativeStuckSince or Now
@@ -19009,6 +19112,7 @@ SetVisibility =
 
 		if Visible then
 			SystemMenuButtonClosing = false
+			Hub.PromptHold, Hub.PromptSince = false, nil
 			-- ESC menu is open: hide the recorder overlay, but keep its timer
 			-- and recording state running.
 			SetRecorderOverlayVisibility(false)
@@ -19571,7 +19675,17 @@ HookNativeMenu =
 				local Open = false
 				pcall(function() Open = GuiService.MenuIsOpen == true end)
 				if Open then
-					NativeMenuOpened()
+					-- MenuIsOpen is also true for prompts (Favorite Item ...) and other menus.  Give a
+					-- Settings root a moment to show up (its own handler opens our menu at once), then
+					-- only follow when Roblox's settings menu really is the open one.
+					task.delay(0.3, function()
+						if not Hub or Hub.Visible then return end
+						if Hub.OpenedByNative ~= true and GetNativeHubVisible() == false then
+							Trace("MenuIsOpen is true but Roblox's settings menu is closed (a prompt?): the custom menu stays closed")
+							return
+						end
+						NativeMenuOpened()
+					end)
 				else
 					local WasOwned = Hub.OpenedByNative == true
 					Hub.OpenedByNative = false
