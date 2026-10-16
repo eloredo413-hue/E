@@ -55,7 +55,7 @@ do
 	if Env and Env.Settings2016Trace then
 		pcall(function() if writefile then writefile("Settings2016_trace.txt", "") end end)
 		Env.Settings2016TraceDump = function() return table.concat(TraceBuffer, "\n") end
-		Trace("trace started (menu build 2023-esc-v5.5)")
+		Trace("trace started (menu build 2023-esc-v5.6)")
 	end
 end
 MenuStartTick = tick()
@@ -85,7 +85,7 @@ end
 -- Lets you check which copy of this menu is running: print(getgenv().Settings2016Version)
 pcall(function()
 	local Env = getgenv and getgenv() or nil
-	if Env then Env.Settings2016Version = "2023-esc-v5.5" end
+	if Env then Env.Settings2016Version = "2023-esc-v5.6" end
 end)
 
 -- INVITE FRIENDS ROW TEXT SIZE (applies on every device)
@@ -3797,6 +3797,23 @@ MakeText = function(
 	)
 end
 
+-- Every styled button and the skin it returns to.  On a touch screen the blue "selected" skin used to
+-- stay on a button after it was tapped (MouseLeave is not delivered when the finger lifts or the page
+-- changes): the Leave / Reset buttons then stayed blue.  Touch now only shows blue while pressed, and
+-- ResetStyledButtonSkins (run every pass of the 0.25 s loop and when a page opens) puts back the rest.
+StyledButtons = setmetatable({}, {__mode = "k"})
+
+ResetStyledButtonSkins = function()
+	local Now = tick()
+	for Button, Info in pairs(StyledButtons) do
+		if Button.Parent and Button.ImageTransparency < 1 and Button.Image ~= Info.Default
+			and not (Info.Pressed and Now - Info.PressedAt < 1.5)
+			and not Button:GetAttribute("KeepBlue") then
+			Button.Image = Info.Default
+		end
+	end
+end
+
 MakeStyledButton = function(
 	Name,
 	Text,
@@ -3907,12 +3924,43 @@ MakeStyledButton = function(
 			}
 		)
 
+	local SkinInfo = {
+		Default = SelectedByDefault and BUTTON_SELECTED_IMAGE or BUTTON_IMAGE,
+		Pressed = false,
+		PressedAt = 0,
+	}
+	StyledButtons[Button] = SkinInfo
+
 	Connect(
 		Button.MouseEnter,
 		function()
+			-- touch has no hover: blue only while a finger is down (below)
+			if IsMobile then return end
 			if Button.Active ~= false then
 				Button.Image =
 					BUTTON_SELECTED_IMAGE
+			end
+		end
+	)
+
+	Connect(
+		Button.InputBegan,
+		function(Input)
+			if IsMobile and Input.UserInputType == Enum.UserInputType.Touch and Button.Active ~= false then
+				SkinInfo.Pressed, SkinInfo.PressedAt = true, tick()
+				Button.Image = BUTTON_SELECTED_IMAGE
+			end
+		end
+	)
+
+	Connect(
+		Button.InputEnded,
+		function(Input)
+			if Input.UserInputType == Enum.UserInputType.Touch then
+				SkinInfo.Pressed = false
+				if Button.ImageTransparency < 1 and not Button:GetAttribute("KeepBlue") then
+					Button.Image = SkinInfo.Default
+				end
 			end
 		end
 	)
@@ -5468,6 +5516,7 @@ SwitchToPage = function(
 		return
 	end
 	Trace("SwitchToPage " .. tostring(Page.Name))
+	if IsMobile and ResetStyledButtonSkins then pcall(ResetStyledButtonSkins) end
 
 	local OldPage =
 		Hub.CurrentPage
@@ -17652,6 +17701,7 @@ ShowAlert =
 			-- Keep the selected blue Roblox button asset for the entire lifetime
 			-- of the error dialog; don't rely on hover/selection state.
 			Button.Image = BUTTON_SELECTED_IMAGE
+			Button:SetAttribute("KeepBlue", true)
 			Button.ImageColor3 = Color3.new(1, 1, 1)
 			Button.AutoButtonColor = false
 		end
@@ -19540,6 +19590,9 @@ Spawn(function()
 			end
 		end)
 		Step("watchdog", SystemMenuWatchdog)
+		Step("skins", function()
+			if IsMobile then ResetStyledButtonSkins() end
+		end)
 		Wait(0.25)
 	end
 end)
@@ -19938,4 +19991,4 @@ end
 Api.Instance = Hub
 getgenv().Settings2016 = Api
 return Api
--- end of 2023_esc_menu.lua (2023-esc-v5.5)
+-- end of 2023_esc_menu.lua (2023-esc-v5.6)
