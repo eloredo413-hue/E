@@ -55,13 +55,13 @@ do
 	if Env and Env.Settings2016Trace then
 		pcall(function() if writefile then writefile("Settings2016_trace.txt", "") end end)
 		Env.Settings2016TraceDump = function() return table.concat(TraceBuffer, "\n") end
-		Trace("trace started (menu build 2023-esc-v4)")
+		Trace("trace started (menu build 2023-esc-v5)")
 	end
 end
 -- Lets you check which copy of this menu is running: print(getgenv().Settings2016Version)
 pcall(function()
 	local Env = getgenv and getgenv() or nil
-	if Env then Env.Settings2016Version = "2023-esc-v4" end
+	if Env then Env.Settings2016Version = "2023-esc-v5" end
 end)
 
 -- INVITE FRIENDS ROW TEXT SIZE (applies on every device)
@@ -4797,7 +4797,7 @@ ResizeHub = function()
 		Hub.MenuContainer.Size = UDim2.new(1, 0, 1, 0)
 		Hub.MenuContainer.Position = UDim2.new(0, 0, 0, 0)
 		Hub.MenuContainer.AnchorPoint = Vector2.new(0, 0)
-		local PhoneBarSideInset = 8
+		local PhoneBarSideInset = 16
 		local PhonePageSideInset = 16
 		local Width = math.max(1, math.floor(LayoutViewport.X - PhoneInsetL - PhoneInsetR - PhonePageSideInset * 2 + 0.5))
 
@@ -4905,13 +4905,13 @@ ResizeHub = function()
                             Label.ZIndex = SETTINGS_BASE_ZINDEX + 5
                             Label.TextWrapped = false
                             Label.TextScaled = true
-                            Label.TextSize = 18
+                            Label.TextSize = 22
                             local LabelConstraint = Label:FindFirstChildOfClass("UITextSizeConstraint")
                             if LabelConstraint then
-                                LabelConstraint.MinTextSize = 15
-                                LabelConstraint.MaxTextSize = 18
+                                LabelConstraint.MinTextSize = 16
+                                LabelConstraint.MaxTextSize = 22
                             else
-                                Create("UITextSizeConstraint", {Parent = Label, MinTextSize = 15, MaxTextSize = 18})
+                                Create("UITextSizeConstraint", {Parent = Label, MinTextSize = 16, MaxTextSize = 22})
                             end
                             Label.TextXAlignment = Enum.TextXAlignment.Center
                             Label.TextYAlignment = Enum.TextYAlignment.Center
@@ -5330,8 +5330,8 @@ LayoutTabs = function()
 				Page.Icon.ImageTransparency = Selected and 0 or 0.5
 				local Title = Page.Icon:FindFirstChild("Title")
 				if IsMobile then
-					local IconWidth = 28
-					local IconHeight = 28
+					local IconWidth = 32
+					local IconHeight = 32
 					local GroupGap = 2
 					local MinLeftInset = 2
 					local RightInset = 10
@@ -5352,7 +5352,7 @@ LayoutTabs = function()
 					local FittedTextSize = 12
 					if Title then
 						local FoundFit = false
-						for CandidateSize = 16, 11, -1 do
+						for CandidateSize = 20, 11, -1 do
 							local MeasuredWidth = GetMenuMeasuredTextWidth(Title, Title.Text, CandidateSize)
 							if MeasuredWidth + 2 <= MaxTitleWidth then
 								FittedTextSize = CandidateSize
@@ -17846,15 +17846,15 @@ ConfigureMobileActionButtons = function()
                 end
                 local Label = Button:FindFirstChild(Button.Name .. "TextLabel")
                 if Label then
-                    Label.TextSize = 18
+                    Label.TextSize = 22
                     Label.TextWrapped = true
                     Label.TextScaled = true
                     local LabelConstraint = Label:FindFirstChildOfClass("UITextSizeConstraint")
                     if LabelConstraint then
-                        LabelConstraint.MinTextSize = 15
-                        LabelConstraint.MaxTextSize = 18
+                        LabelConstraint.MinTextSize = 16
+                        LabelConstraint.MaxTextSize = 22
                     else
-                        Create("UITextSizeConstraint", {Parent = Label, MinTextSize = 15, MaxTextSize = 18})
+                        Create("UITextSizeConstraint", {Parent = Label, MinTextSize = 16, MaxTextSize = 22})
                     end
                     Label.TextXAlignment = Enum.TextXAlignment.Center
                     Label.TextYAlignment = Enum.TextYAlignment.Center
@@ -18581,6 +18581,51 @@ GetPhoneSafeInsets =
 		return SafeInsetL, SafeInsetR
 	end
 
+NativeMenuIconHeuristicStamp = 0
+
+-- Our own gui (this menu, the chat, the probes) is never the Roblox logo.
+IsOwnGuiObject =
+	function(Object)
+		local Current = Object
+		for _ = 1, 40 do
+			if not Current or Current == CoreGui then return false end
+			local Name = Current.Name
+			if type(Name) == "string" and (Name:sub(1, 12) == "Settings2016" or Name:sub(1, 10) == "LegacyChat") then
+				return true
+			end
+			Current = Current.Parent
+		end
+		return false
+	end
+
+-- When nothing usable sits at the expected path: the Roblox logo is the FIRST button of the
+-- top bar, i.e. the left-most button of logo size, a small margin to the right of the safe-area
+-- edge.  (The chat button, next to it, is a whole icon-width further right.)
+FindNativeMenuIconByGeometry =
+	function()
+		local Root = CoreGui:FindFirstChild("TopBarApp")
+		local Probe = GetOriginProbe()
+		if not Root or not Probe then return nil end
+		local Best, BestX = nil, nil
+		local Ok = pcall(function()
+			local Origin = Probe.AbsolutePosition
+			local EdgeLeft = (IsPhone and SafeInsetL) or 0
+			for _, Object in ipairs(Root:GetDescendants()) do
+				if Object:IsA("GuiButton") and Object.Visible and not IsOwnGuiObject(Object) then
+					local Position, Size = Object.AbsolutePosition, Object.AbsoluteSize
+					local X, Y = Position.X - Origin.X, Position.Y - Origin.Y
+					if Size.X >= 28 and Size.X <= 64 and Size.Y >= 28 and Size.Y <= 64
+						and X >= EdgeLeft - 6 and X <= EdgeLeft + 32 and Y >= -30 and Y <= 70
+					then
+						if not Best or X < BestX then Best, BestX = Object, X end
+					end
+				end
+			end
+		end)
+		if Ok then return Best end
+		return nil
+	end
+
 FindNativeMenuIconObject =
 	function()
 		local Root = CoreGui:FindFirstChild("TopBarApp")
@@ -18599,6 +18644,10 @@ FindNativeMenuIconObject =
 		if Hit then
 			local Ok, IsGui = pcall(function() return Hit:IsA("GuiObject") end)
 			if Ok and IsGui then return Hit end
+		end
+		if tick() - NativeMenuIconHeuristicStamp >= 2 then
+			NativeMenuIconHeuristicStamp = tick()
+			return FindNativeMenuIconByGeometry()
 		end
 		return nil
 	end
@@ -18621,6 +18670,7 @@ MeasureNativeMenuIcon =
 		-- A frame that was just created may not have a laid-out position yet.
 		if tick() - NativeIconOriginProbeStamp < 0.2 then return NativeMenuIconRect end
 		-- The button itself, then the frames around it: whichever has a believable size.
+		local FoundRect = false
 		local Candidates = {Hit, Hit.Parent, Hit.Parent and Hit.Parent.Parent}
 		for _, Candidate in ipairs(Candidates) do
 			local Ok, Rect = pcall(function()
@@ -18634,10 +18684,20 @@ MeasureNativeMenuIcon =
 			then
 				local Previous = NativeMenuIconRect
 				NativeMenuIconRect = Rect
+				FoundRect = true
 				if not Previous or math.abs(Previous.X - Rect.X) > 1 or math.abs(Previous.Y - Rect.Y) > 1 or math.abs(Previous.W - Rect.W) > 1 then
 					Trace(string.format("native menu icon rect (%s): x=%.0f y=%.0f w=%.0f h=%.0f", tostring(Candidate.Name), Rect.X, Rect.Y, Rect.W, Rect.H))
 				end
 				break
+			end
+		end
+		-- nothing believable at the expected place: look at what is really in the top-left corner
+		if not FoundRect and tick() - NativeMenuIconHeuristicStamp >= 2 then
+			NativeMenuIconHeuristicStamp = tick()
+			local Guess = FindNativeMenuIconByGeometry()
+			if Guess and Guess ~= Hit then
+				Trace("native menu icon: using " .. Guess:GetFullName() .. " (nothing usable at the expected path)")
+				NativeMenuIconObject = Guess
 			end
 		end
 		return NativeMenuIconRect
@@ -18740,6 +18800,7 @@ CloseNativeMenu =
 					end
 					return true
 				end
+				local HubClosedByModule = false
 				local Steps = {
 					{Name = "SettingsHub:SetVisibility(false)", Seconds = 0.35, Run = function()
 						local RobloxGui = CoreGui:FindFirstChild("RobloxGui")
@@ -18752,22 +18813,33 @@ CloseNativeMenu =
 							error("SettingsHub has no SetVisibility")
 						end
 						Loaded:SetVisibility(false, true)
+						-- The settings hub says it is closed: whatever keeps MenuIsOpen true now is something
+						-- else (a Roblox prompt such as "Favorite Item", the emotes menu ...), not ours to touch.
+						local HubVisible = Loaded.Visible
+						if HubVisible == nil and type(Loaded.GetVisibility) == "function" then
+							local GotVisible, GotValue = pcall(function() return Loaded:GetVisibility() end)
+							if GotVisible then HubVisible = GotValue end
+						end
+						if HubVisible == false then HubClosedByModule = true end
 					end},
-					{Name = "native icon Activated", Seconds = 0.5, Run = function()
+					{Name = "native icon Activated", Toggle = true, Seconds = 0.5, Run = function()
 						FireNativeIconSignal("Activated")
 					end},
-					{Name = "native icon MouseButton1Click", Seconds = 0.5, Run = function()
+					{Name = "native icon MouseButton1Click", Toggle = true, Seconds = 0.5, Run = function()
 						FireNativeIconSignal("MouseButton1Click")
 					end},
 					{Name = "GuiService:SetMenuIsOpen(false)", Seconds = 0.35, Run = function()
 						local Worked = false
-						for _, MenuName in ipairs({"SettingsMenu", "InGameMenu", "Settings", ""}) do
+							local MenuNames = {"SettingsMenu", "InGameMenu", "Settings"}
+							-- the unnamed menu is only touched while the settings hub itself is open (a prompt may own it)
+							if not HubClosedByModule then MenuNames[#MenuNames + 1] = "" end
+							for _, MenuName in ipairs(MenuNames) do
 							if pcall(function() GuiService:SetMenuIsOpen(false, MenuName) end) then Worked = true end
 							if not NativeMenuIsOpen() then break end
 						end
 						if not Worked then error("GuiService:SetMenuIsOpen is not available") end
 					end},
-					{Name = "Escape key", MobileOnly = true, Seconds = 0.5, Run = function()
+					{Name = "Escape key", MobileOnly = true, Toggle = true, Seconds = 0.5, Run = function()
 						local VIM = game:GetService("VirtualInputManager")
 						VIM:SendKeyEvent(true, Enum.KeyCode.Escape, false, game)
 						Wait(0.05)
@@ -18778,7 +18850,7 @@ CloseNativeMenu =
 				for Index, Step in ipairs(Steps) do
 					-- Step 1 also runs when MenuIsOpen reads false (it only SETS the state).
 					-- The rest need proof that it is Roblox's settings menu that is open.
-					if Index == 1 or (Owned and not (Step.MobileOnly and not IsMobile)) then
+					if Index == 1 or (Owned and not (Step.MobileOnly and not IsMobile) and not (Step.Toggle and HubClosedByModule)) then
 						if Index > 1 and not NativeMenuIsOpen() then Closed = true break end
 						local StepOk, StepErr = pcall(Step.Run)
 						Trace("native close: " .. Step.Name .. (StepOk and " ok" or (" failed: " .. tostring(StepErr))))
@@ -18825,7 +18897,7 @@ HookNativeIcon =
 			Hub.NativeMenuTarget = Target
 			if Target then Hub.OpenedByNative = true end
 			task.defer(function()
-				SetVisibility(Target, IsMobile)
+				SetVisibility(Target, IsMobile and not Target)
 				if Hub.NativeMenuTarget == Target then Hub.NativeMenuTarget = nil end
 			end)
 		end)
@@ -19435,7 +19507,7 @@ HookNativeMenu =
 				local Target = Hub.NativeMenuTarget
 				Hub.NativeMenuTarget = nil
 				if Target == nil then Target = true end
-				if Hub.Visible ~= Target then SetVisibility(Target, IsMobile) end
+				if Hub.Visible ~= Target then SetVisibility(Target, IsMobile and not Target) end
 			end)
 		end
 
