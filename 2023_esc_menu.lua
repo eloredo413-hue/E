@@ -55,13 +55,13 @@ do
 	if Env and Env.Settings2016Trace then
 		pcall(function() if writefile then writefile("Settings2016_trace.txt", "") end end)
 		Env.Settings2016TraceDump = function() return table.concat(TraceBuffer, "\n") end
-		Trace("trace started (menu build 2023-esc-v5.1)")
+		Trace("trace started (menu build 2023-esc-v5.2)")
 	end
 end
 -- Lets you check which copy of this menu is running: print(getgenv().Settings2016Version)
 pcall(function()
 	local Env = getgenv and getgenv() or nil
-	if Env then Env.Settings2016Version = "2023-esc-v5.1" end
+	if Env then Env.Settings2016Version = "2023-esc-v5.2" end
 end)
 
 -- INVITE FRIENDS ROW TEXT SIZE (applies on every device)
@@ -4797,7 +4797,7 @@ ResizeHub = function()
 		Hub.MenuContainer.Size = UDim2.new(1, 0, 1, 0)
 		Hub.MenuContainer.Position = UDim2.new(0, 0, 0, 0)
 		Hub.MenuContainer.AnchorPoint = Vector2.new(0, 0)
-		local PhoneBarSideInset = 16
+		local PhoneBarSideInset = 8
 		local PhonePageSideInset = 16
 		local Width = math.max(1, math.floor(LayoutViewport.X - PhoneInsetL - PhoneInsetR - PhonePageSideInset * 2 + 0.5))
 
