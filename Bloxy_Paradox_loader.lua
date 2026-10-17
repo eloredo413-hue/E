@@ -223,6 +223,7 @@ task.spawn(function()
     local function startBubbleScript(era)
         if activeBubbleEra == era or bubbleBusy then return end
         bubbleBusy = true
+        local failed = false
         pcall(function()
             -- a script that cannot be stopped is still running: do not start a second copy
             if cannotStop[era] then
@@ -234,6 +235,7 @@ task.spawn(function()
 
             local src, usedUrl = fetchBubbleSource(BUBBLE_SOURCES[era](), BUBBLE_MARKERS[era])
             if not src then
+                failed = true
                 lastFailedEra = era
                 warn("[Loader] could not download the " .. era .. " bubble script (will retry on the next Confirm)")
                 return
@@ -243,6 +245,7 @@ task.spawn(function()
             if activeBubbleEra then stopBubbleScript(activeBubbleEra) end
             local chunk, compileError = loadstring(src)
             if not chunk then
+                failed = true
                 warn("[Loader] the " .. era .. " bubble script did not compile:", compileError)
                 return
             end
@@ -261,6 +264,7 @@ task.spawn(function()
                 waited = waited + 0.1
             end
             if finished and not runOk then
+                failed = true
                 warn("[Loader] the " .. era .. " bubble script errored:", runError)
                 return
             end
@@ -284,6 +288,9 @@ task.spawn(function()
             print("[Loader] " .. era .. " bubbles loaded from " .. tostring(usedUrl):sub(1, 90))
         end)
         bubbleBusy = false
+        -- A bubble script that did not start must not leave the game without any bubbles: the
+        -- regular ones (switched off for the 2010-2014 bubbles) come back.
+        if failed then setNativeBubbles(false) end
         -- the last Confirm may have asked for another era while this one was loading
         if desiredBubbleEra and desiredBubbleEra ~= activeBubbleEra and lastFailedEra ~= desiredBubbleEra then
             task.spawn(startBubbleScript, desiredBubbleEra)
