@@ -15,8 +15,10 @@ VOICE_CHAT_FORCE_OFF = VOICE_CHAT_MODE == "NEVER"
 --
 --   getgenv().Settings2016Trace = true
 --       Before each risky step of opening/closing the menu, a numbered line is
---       appended to workspace/Settings2016_trace.txt AND copied to the clipboard.
---       If Roblox dies, the LAST line names the step that never finished.
+--       recorded (workspace/Settings2016_trace.txt when the executor can write files).
+--       The WHOLE trace (last 300 lines) is also kept on the clipboard after every line, and
+--       print(getgenv().Settings2016TraceDump()) shows it.  If Roblox dies, the LAST line
+--       names the step that never finished.
 --
 --   getgenv().Settings2016Safe = { NoInputLock = true, NoCoreGui = true,
 --                                  NoNativeHide = true, NoTopBar = true }
@@ -36,24 +38,55 @@ Trace = function(Label)
 	if not (Env and Env.Settings2016Trace) then return end
 	TraceCount = TraceCount + 1
 	local Line = string.format("%04d t=%.3f %s", TraceCount, os.clock(), tostring(Label))
+	TraceBuffer[#TraceBuffer + 1] = Line
+	if #TraceBuffer > 300 then table.remove(TraceBuffer, 1) end
 	pcall(function()
 		if appendfile then
 			appendfile("Settings2016_trace.txt", Line .. "\n")
 		elseif writefile then
-			TraceBuffer[#TraceBuffer + 1] = Line
-			if #TraceBuffer > 200 then table.remove(TraceBuffer, 1) end
 			writefile("Settings2016_trace.txt", table.concat(TraceBuffer, "\n"))
 		end
 	end)
-	pcall(function() if setclipboard then setclipboard(Line) end end)
+	-- Phone executors usually have no file access: keep the whole trace on the clipboard.
+	pcall(function() if setclipboard then setclipboard(table.concat(TraceBuffer, "\n")) end end)
 end
 do
 	local Env = getgenv and getgenv() or nil
 	if Env and Env.Settings2016Trace then
 		pcall(function() if writefile then writefile("Settings2016_trace.txt", "") end end)
-		Trace("trace started")
+		Env.Settings2016TraceDump = function() return table.concat(TraceBuffer, "\n") end
+		Trace("trace started (menu build 2023-esc-v5.7)")
 	end
 end
+MenuStartTick = tick()
+TopLeftDumped = false
+-- Trace only: what is in the top-left corner of the Roblox top bar, so a trace shows the real layout.
+DumpTopLeftToTrace = function()
+	local Env = getgenv and getgenv() or nil
+	if not (Env and Env.Settings2016Trace) then return end
+	pcall(function()
+		local Root = game:GetService("CoreGui"):FindFirstChild("TopBarApp")
+		if not Root then Trace("top-left dump: no CoreGui.TopBarApp") return end
+		local Probe = GetOriginProbe and GetOriginProbe()
+		local Origin = Probe and Probe.AbsolutePosition or Vector2.new(0, 0)
+		Trace(string.format("top-left dump: safe inset L=%s R=%s, viewport %s", tostring(SafeInsetL), tostring(SafeInsetR), tostring(ScreenGui and ScreenGui.AbsoluteSize)))
+		local Lines = 0
+		for _, Object in ipairs(Root:GetDescendants()) do
+			if Object:IsA("GuiObject") and Lines < 70 then
+				local Position, Size = Object.AbsolutePosition, Object.AbsoluteSize
+				if Position.X - Origin.X < 420 and Position.Y - Origin.Y < 90 and Size.X > 0 and Size.X < 260 and Object.Visible then
+					Lines = Lines + 1
+					Trace(string.format("  %s %s x=%.0f y=%.0f w=%.0f h=%.0f", Object.ClassName, Object:GetFullName():gsub("^.-TopBarApp%.", ""), Position.X - Origin.X, Position.Y - Origin.Y, Size.X, Size.Y))
+				end
+			end
+		end
+	end)
+end
+-- Lets you check which copy of this menu is running: print(getgenv().Settings2016Version)
+pcall(function()
+	local Env = getgenv and getgenv() or nil
+	if Env then Env.Settings2016Version = "2023-esc-v5.7" end
+end)
 
 -- INVITE FRIENDS ROW TEXT SIZE (applies on every device)
 -- Adjust these values to tune how small/large "Invite friends to join" can render.
@@ -412,12 +445,19 @@ INVITE_SHARE_ROW_GAP = 8
 MOBILE_HUBBAR_HEIGHT = 48
 TABLET_HUBBAR_HEIGHT = 48
 
--- Custom SystemMenuButton offsets.
+-- Custom SystemMenuButton offsets (used while the native menu icon cannot be measured, and
+-- whenever they already cover it).  See GetSystemMenuGeometry.
 SYSTEM_MENU_OFFSET_X = 16
 SYSTEM_MENU_OFFSET_Y = 4
 MOBILE_SYSTEM_MENU_OFFSET_X = 16
+-- Phones: centre of the Roblox logo, measured from the left safe-area edge / the screen top
+-- (read off a screen recording of the real top bar; the logo is its first icon).
+PHONE_LOGO_CENTER_X = 30
+PHONE_LOGO_CENTER_Y = 18
 GetSystemMenuButtonOffsetX = function()
-    return IsPhone and MOBILE_SYSTEM_MENU_OFFSET_X or SYSTEM_MENU_OFFSET_X
+	local Geometry = GetSystemMenuGeometry and GetSystemMenuGeometry() or nil
+	if Geometry then return Geometry.ButtonX end
+	return IsPhone and MOBILE_SYSTEM_MENU_OFFSET_X or SYSTEM_MENU_OFFSET_X
 end
 
 -- Recorder overlay position relative to SystemMenuButton.
@@ -3757,6 +3797,23 @@ MakeText = function(
 	)
 end
 
+-- Every styled button and the skin it returns to.  On a touch screen the blue "selected" skin used to
+-- stay on a button after it was tapped (MouseLeave is not delivered when the finger lifts or the page
+-- changes): the Leave / Reset buttons then stayed blue.  Touch now only shows blue while pressed, and
+-- ResetStyledButtonSkins (run every pass of the 0.25 s loop and when a page opens) puts back the rest.
+StyledButtons = setmetatable({}, {__mode = "k"})
+
+ResetStyledButtonSkins = function()
+	local Now = tick()
+	for Button, Info in pairs(StyledButtons) do
+		if Button.Parent and Button.ImageTransparency < 1 and Button.Image ~= Info.Default
+			and not (Info.Pressed and Now - Info.PressedAt < 1.5)
+			and not Button:GetAttribute("KeepBlue") then
+			Button.Image = Info.Default
+		end
+	end
+end
+
 MakeStyledButton = function(
 	Name,
 	Text,
@@ -3867,12 +3924,43 @@ MakeStyledButton = function(
 			}
 		)
 
+	local SkinInfo = {
+		Default = SelectedByDefault and BUTTON_SELECTED_IMAGE or BUTTON_IMAGE,
+		Pressed = false,
+		PressedAt = 0,
+	}
+	StyledButtons[Button] = SkinInfo
+
 	Connect(
 		Button.MouseEnter,
 		function()
+			-- touch has no hover: blue only while a finger is down (below)
+			if IsMobile then return end
 			if Button.Active ~= false then
 				Button.Image =
 					BUTTON_SELECTED_IMAGE
+			end
+		end
+	)
+
+	Connect(
+		Button.InputBegan,
+		function(Input)
+			if IsMobile and Input.UserInputType == Enum.UserInputType.Touch and Button.Active ~= false then
+				SkinInfo.Pressed, SkinInfo.PressedAt = true, tick()
+				Button.Image = BUTTON_SELECTED_IMAGE
+			end
+		end
+	)
+
+	Connect(
+		Button.InputEnded,
+		function(Input)
+			if Input.UserInputType == Enum.UserInputType.Touch then
+				SkinInfo.Pressed = false
+				if Button.ImageTransparency < 1 and not Button:GetAttribute("KeepBlue") then
+					Button.Image = SkinInfo.Default
+				end
 			end
 		end
 	)
@@ -4474,6 +4562,16 @@ ResizeHub = function()
 	if IsMobile and not IsTablet and TabletScale > 1 then
 		LayoutViewport = Vector2.new(Viewport.X / TabletScale, Viewport.Y / TabletScale)
 	end
+	-- Phones: keep the menu out of the camera cut-out / rounded corners, like the Roblox top bar.
+	local PhoneInsetL, PhoneInsetR = 0, 0
+	if IsPhone and GetPhoneSafeInsets then
+		PhoneInsetL, PhoneInsetR = GetPhoneSafeInsets()
+		local InsetScale = math.max(TabletScale, 1)
+		PhoneInsetL, PhoneInsetR = PhoneInsetL / InsetScale, PhoneInsetR / InsetScale
+		LastLayoutInsetL, LastLayoutInsetR = PhoneInsetL * InsetScale, PhoneInsetR * InsetScale
+		-- pages that are centred on the screen are centred in the safe area instead
+		TabletXOffset = (PhoneInsetL - PhoneInsetR) / 2
+	end
 
 	-- ========================================================
 	-- INVITE PAGE
@@ -4497,7 +4595,7 @@ ResizeHub = function()
 			-- normal ESC menu. Tablets keep a capped, PC-like width.
 
 			local PhonePageSideInset = 16
-			Width = math.max(1, math.min(TOTAL_HUB_WIDTH, math.floor(LayoutViewport.X - PhonePageSideInset * 2 + 0.5)))
+			Width = math.max(1, math.min(TOTAL_HUB_WIDTH, math.floor(LayoutViewport.X - PhoneInsetL - PhoneInsetR - PhonePageSideInset * 2 + 0.5)))
 
 			-- Keep the invite page below the camera/notch region while the HubBar
 			-- itself remains edge-to-edge.
@@ -4626,11 +4724,11 @@ ResizeHub = function()
 		-- ====================================================
 
 		local Width = IsPhone
-			and math.max(1, math.min(800, math.floor(LayoutViewport.X - 32 + 0.5)))
+			and math.max(1, math.min(800, math.floor(LayoutViewport.X - PhoneInsetL - PhoneInsetR - 32 + 0.5)))
 			or (IsTablet and math.min(TOTAL_HUB_WIDTH, math.max(280, LayoutViewport.X - 48)))
 			or math.max(280, math.floor(Viewport.X * 0.94))
 
-		local ConfirmationHeight = IsPhone and 240 or 280
+		local ConfirmationHeight = IsPhone and 130 or 280
 
 		Hub.HubBar.Visible = false
 		Hub.BottomButtonFrame.Visible = false
@@ -4640,7 +4738,7 @@ ResizeHub = function()
 		Hub.PageClipper.Size = UDim2.new(0, Width, 0, ConfirmationHeight)
 		Hub.PageClipper.Position =
 			IsPhone
-			and UDim2.new(0.5, -Width / 2 + TabletXOffset, 0.5, -ConfirmationHeight / 2)
+			and UDim2.new(0.5, -Width / 2 + TabletXOffset, 0.5, -ConfirmationHeight / 2 - 31)
 			or UDim2.new(0.5, -Width / 2, 0.5, -ConfirmationHeight / 2 + 75)
 
 		Hub.PageView.AnchorPoint = Vector2.new(0, 0)
@@ -4777,33 +4875,34 @@ ResizeHub = function()
 		Hub.MenuContainer.AnchorPoint = Vector2.new(0, 0)
 		local PhoneBarSideInset = 8
 		local PhonePageSideInset = 16
-		local Width = math.max(1, math.floor(LayoutViewport.X - PhonePageSideInset * 2 + 0.5))
+		local Width = math.max(1, math.floor(LayoutViewport.X - PhoneInsetL - PhoneInsetR - PhonePageSideInset * 2 + 0.5))
 
 		local GroupTop = SYSTEM_MENU_SIZE.Y + MOBILE_MENU_GAP
 		local MobileBarHeight = math.max(44, MOBILE_HUBBAR_HEIGHT)
 
+		-- The page starts right under the tab bar and ends a little above the bottom edge. It used
+		-- to be centred on the screen with a +60 offset, which pushed its bottom edge past the
+		-- screen on short phone screens (rows and settings were cut off).
+		local PageTop = GroupTop + MobileBarHeight + 5
 		local PageHeight =
 			math.max(
 				100,
-				math.floor((LayoutViewport.Y * 0.95) - 45 + 0.5)
+				math.floor(LayoutViewport.Y - PageTop - 8 + 0.5)
 			)
-
-		local PageCenterYOffset =
-			(-PageHeight / 2) + 60
 
 		Height =
 			PageHeight
 
 		Hub.HubBar.AnchorPoint = Vector2.new(0, 0)
-		Hub.HubBar.Size = UDim2.new(1, -(PhoneBarSideInset * 2), 0, MobileBarHeight)
-		Hub.HubBar.Position = UDim2.new(0, PhoneBarSideInset, 0, GroupTop)
+		Hub.HubBar.Size = UDim2.new(1, -(PhoneBarSideInset * 2 + PhoneInsetL + PhoneInsetR), 0, MobileBarHeight)
+		Hub.HubBar.Position = UDim2.new(0, PhoneBarSideInset + PhoneInsetL, 0, GroupTop)
 
 		Hub.HubBarContainer.Size = UDim2.new(1, 0, 1, 0)
 		Hub.HubBarContainer.Position = UDim2.new(0, 0, 0, 0)
 		if Hub.HubBarContainerLayout then Hub.HubBarContainerLayout.Parent = Hub.HubBarContainer end
 
-		Hub.PageClipper.Size = UDim2.new(1, -(PhonePageSideInset * 2), 0, PageHeight)
-		Hub.PageClipper.Position = UDim2.new(0, PhonePageSideInset, 0.5, PageCenterYOffset)
+		Hub.PageClipper.Size = UDim2.new(1, -(PhonePageSideInset * 2 + PhoneInsetL + PhoneInsetR), 0, PageHeight)
+		Hub.PageClipper.Position = UDim2.new(0, PhonePageSideInset + PhoneInsetL, 0, PageTop)
 
 		-- The fixed PC button frame is NEVER used on mobile.
 		Hub.BottomButtonFrame.Visible = false
@@ -4882,13 +4981,13 @@ ResizeHub = function()
                             Label.ZIndex = SETTINGS_BASE_ZINDEX + 5
                             Label.TextWrapped = false
                             Label.TextScaled = true
-                            Label.TextSize = 18
+                            Label.TextSize = 22
                             local LabelConstraint = Label:FindFirstChildOfClass("UITextSizeConstraint")
                             if LabelConstraint then
-                                LabelConstraint.MinTextSize = 15
-                                LabelConstraint.MaxTextSize = 18
+                                LabelConstraint.MinTextSize = 16
+                                LabelConstraint.MaxTextSize = 22
                             else
-                                Create("UITextSizeConstraint", {Parent = Label, MinTextSize = 15, MaxTextSize = 18})
+                                Create("UITextSizeConstraint", {Parent = Label, MinTextSize = 16, MaxTextSize = 22})
                             end
                             Label.TextXAlignment = Enum.TextXAlignment.Center
                             Label.TextYAlignment = Enum.TextYAlignment.Center
@@ -5328,12 +5427,23 @@ LayoutTabs = function()
 					local TitleWidth = MaxTitleWidth
 					local FittedTextSize = 12
 					if Title then
+						-- Measure with the label itself (its real font), never narrower than the
+						-- TextService estimate, plus a small margin: the text must never be cut off.
+						Title.TextWrapped = false
+						Title.TextScaled = false
+						local function MeasureTitle(Size)
+							Title.TextSize = Size
+							local Bounds = 0
+							pcall(function() Bounds = Title.TextBounds.X end)
+							local Estimate = GetMenuMeasuredTextWidth(Title, Title.Text, Size)
+							return math.max(Bounds, Estimate) * 1.05 + 4
+						end
 						local FoundFit = false
-						for CandidateSize = 16, 11, -1 do
-							local MeasuredWidth = GetMenuMeasuredTextWidth(Title, Title.Text, CandidateSize)
-							if MeasuredWidth + 2 <= MaxTitleWidth then
+						for CandidateSize = 17, 11, -1 do
+							local MeasuredWidth = MeasureTitle(CandidateSize)
+							if MeasuredWidth <= MaxTitleWidth then
 								FittedTextSize = CandidateSize
-								TitleWidth = math.max(18, math.ceil(MeasuredWidth + 2))
+								TitleWidth = math.max(18, math.ceil(MeasuredWidth))
 								FoundFit = true
 								break
 							end
@@ -5341,10 +5451,12 @@ LayoutTabs = function()
 						if not FoundFit then
 							TitleWidth = MaxTitleWidth
 							FittedTextSize = 11
+							pcall(function() Title.TextTruncate = Enum.TextTruncate.AtEnd end)
 						end
 					end
 					local GroupWidth = IconWidth + GroupGap + TitleWidth
-					local IconLeft = math.floor(TabWidth - RightInset - GroupWidth + 0.5)
+					-- icon + label sit together in the middle of their tab, like the 2021 menu
+					local IconLeft = math.floor((TabWidth - GroupWidth) / 2 + 0.5)
 					if IconLeft < MinLeftInset then IconLeft = MinLeftInset end
 					Page.Icon.Size = UDim2.fromOffset(IconWidth, IconHeight)
 					Page.Icon.Position = UDim2.new(0, IconLeft, 0.5, -IconHeight / 2)
@@ -5404,6 +5516,7 @@ SwitchToPage = function(
 		return
 	end
 	Trace("SwitchToPage " .. tostring(Page.Name))
+	if IsMobile and ResetStyledButtonSkins then pcall(ResetStyledButtonSkins) end
 
 	local OldPage =
 		Hub.CurrentPage
@@ -8302,8 +8415,44 @@ Position =
 	local FriendButton
 	local FriendLabel
 
+	-- Names never run under the buttons: they shrink (down to size 10) to the room that is left
+	-- between the avatar and the left-most button.
+	local FitPlayerNames = function()
+		local LeftOffset = IsMobile and 80 or 60
+		local Reserve = 0
+		for _, Child in ipairs(Row:GetChildren()) do
+			if Child:IsA("GuiButton") and Child.Visible then
+				local X = Child.Position.X
+				if X.Scale == 1 and X.Offset < 0 then Reserve = math.max(Reserve, -X.Offset) end
+			end
+		end
+		if Reserve <= 0 then Reserve = 14 end
+		local Fit = function(Label, BaseSize, Height, CenterOffset)
+			if not (Label and Label:IsA("TextLabel")) then return end
+			local Width = UDim2.new(1, -(LeftOffset + Reserve + 10), 0, Height)
+			if Label.Size.X.Scale == 0 and Label.Size.X.Offset == 0 then
+				-- the original labels are 0x0 boxes: give them the room that is really there
+				Label.Size = Width
+				Label.Position = UDim2.new(0, LeftOffset, 0.5, CenterOffset - Height / 2)
+				Label.TextYAlignment = Enum.TextYAlignment.Center
+			end
+			Label.TextWrapped = false
+			Label.TextScaled = true
+			Label.TextXAlignment = Enum.TextXAlignment.Left
+			local Constraint = Label:FindFirstChildOfClass("UITextSizeConstraint")
+			if not Constraint then Constraint = Create("UITextSizeConstraint", {Parent = Label}) end
+			Constraint.MaxTextSize = BaseSize
+			Constraint.MinTextSize = 10
+		end
+		Fit(Row:FindFirstChild("DisplayNameLabel"), 36, 56, -10)
+		Fit(Row:FindFirstChild("NameLabel"), 24, 34, 12)
+	end
+
 	local PositionPlayerActionButtons = function(HasVoice)
-		if not CanTargetPlayer then return end
+		if not CanTargetPlayer then
+			FitPlayerNames()
+			return
+		end
 		local Right = 0
 		local Step = BUTTON_WIDTH + GAP
 		if FriendButton then
@@ -8321,6 +8470,7 @@ Position =
 		Place(ReportButton)
 		Place(ViewButton)
 		if HasVoice then Place(VoiceButton) end
+		FitPlayerNames()
 	end
 
 	if UserId > 1 then
@@ -13002,11 +13152,18 @@ BuildInviteRow =
 				TextXAlignment = Enum.TextXAlignment.Left,
 				Text = DisplayText,
 				TextWrapped = false,
+				TextScaled = true,
 				Size = USE_NEW_INVITE_MENU and UDim2.new(1, -184, 0, 26) or UDim2.new(1, -330, 0, 30),
 				Position = USE_NEW_INVITE_MENU and UDim2.new(0, 82, 0, 7) or UDim2.new(0, 60, 0, 5),
 				ZIndex = SETTINGS_BASE_ZINDEX + 3,
 			}
 		)
+		Create("UITextSizeConstraint", {
+			Name = "DisplayNameConstraint",
+			Parent = Row:FindFirstChild("DisplayName"),
+			MinTextSize = 10,
+			MaxTextSize = USE_NEW_INVITE_MENU and 22 or 24,
+		})
 
 		Create(
 			"TextLabel",
@@ -13020,11 +13177,18 @@ BuildInviteRow =
 				TextXAlignment = Enum.TextXAlignment.Left,
 				Text = "@" .. (Friend.Username or ""),
 				TextWrapped = false,
+				TextScaled = true,
 				Size = USE_NEW_INVITE_MENU and UDim2.new(1, -184, 0, 26) or UDim2.new(1, -330, 0, 22),
 				Position = USE_NEW_INVITE_MENU and UDim2.new(0, 60, 0, 29) or UDim2.new(0, 60, 0, 27),
 				ZIndex = SETTINGS_BASE_ZINDEX + 3,
 			}
 		)
+		Create("UITextSizeConstraint", {
+			Name = "UsernameConstraint",
+			Parent = Row:FindFirstChild("Username"),
+			MinTextSize = 10,
+			MaxTextSize = USE_NEW_INVITE_MENU and 22 or 17,
+		})
 
 		local StatusText, StatusColor =
 			GetInviteStatus(Friend)
@@ -13481,8 +13645,15 @@ SetTopBarAppEnabled =
 		local App = Root and Root:FindFirstChild("TopBarApp")
 		if not App then return false end
 		local Success = pcall(function()
-			App.Enabled = Enabled
+			if App.Enabled ~= Enabled then App.Enabled = Enabled end
 		end)
+		if not Success then
+			-- Some client builds keep the ScreenGui one level up (CoreGui.TopBarApp holds a
+			-- plain Frame called TopBarApp, which has no Enabled property).
+			Success = pcall(function()
+				if Root.Enabled ~= Enabled then Root.Enabled = Enabled end
+			end)
+		end
 		return Success
 	end
 
@@ -13496,7 +13667,7 @@ SyncTopBarAppVisibility =
 		elseif SystemMenuButtonClosing == true then
 			SetTopBarAppEnabled(false)
 		else
-			SetTopBarAppEnabled(true)
+			SetTopBarAppEnabled(not (Hub and Hub.PromptHold == true))
 		end
 		if RefreshVoiceBetaBadgeVisibility then RefreshVoiceBetaBadgeVisibility() end
 	end
@@ -17300,7 +17471,7 @@ ResetButton, ResetButtonLabel =
 		"Reset",
 		UDim2.new(0, 200, 0, 50),
 		ResetCharacter,
-		true
+		not IsMobile -- on a touch screen it is gray like "Don't Reset" and blue only while pressed
 	)
 ResetButton.Parent = ResetPage.Frame
 ApplyResetButtonAvailability()
@@ -17335,7 +17506,7 @@ LeaveMessage = MakeText(
 )
 LeaveMessage.TextSize = 36
 
-LeaveButton = MakeStyledButton("LeaveGame", "Leave", UDim2.new(0, 200, 0, 50), LeaveGame, true)
+LeaveButton = MakeStyledButton("LeaveGame", "Leave", UDim2.new(0, 200, 0, 50), LeaveGame, not IsMobile)
 LeaveButton.Parent = LeavePage.Frame
 
 DontLeaveButton = MakeStyledButton(
@@ -17410,23 +17581,42 @@ PositionMobileConfirmationButtons =
 		end
 		local AvailableWidth = math.max(250, Viewport.X - 24)
 		local ButtonWidth = math.min(168, math.max(108, (AvailableWidth - 12) / 2))
+		-- Phones: the proportions of the 2021 menu's confirmation: a bigger message, wide buttons
+		-- a little further apart, all close together and slightly above the middle of the screen.
+		local PhoneConfirm = IsPhone
+		local ButtonGap, ButtonHeight, ButtonTop = 12, 48, 150
+		if PhoneConfirm then
+			local PanelWidth = tonumber(Hub.PageClipper.AbsoluteSize.X) or 0
+			if PanelWidth <= 0 then PanelWidth = Viewport.X - 32 end
+			ButtonGap, ButtonHeight, ButtonTop = 40, 50, 74
+			ButtonWidth = math.min(200, math.max(108, math.floor((PanelWidth - ButtonGap - 16) / 2)))
+		end
 		for _, Info in next, {
 			{ResetPage.Frame, ResetButton, DontResetButton},
 			{LeavePage.Frame, LeaveButton, DontLeaveButton},
 		} do
 			local Frame, LeftButton, RightButton = Info[1], Info[2], Info[3]
-			Frame.Size = UDim2.new(1, 0, 0, 240)
+			Frame.Size = UDim2.new(1, 0, 0, PhoneConfirm and 130 or 240)
 			local Message = Frame:FindFirstChildWhichIsA("TextLabel")
 			if Message then
-				Message.Size = UDim2.new(1, -24, 0, 88)
-				Message.Position = UDim2.new(0, 12, 0, 20)
-				Message.TextWrapped = true
-				Message.TextSize = 22
+				if PhoneConfirm then
+					Message.Size = UDim2.new(1, -24, 0, 62)
+					Message.Position = UDim2.new(0, 12, 0, 0)
+					Message.TextYAlignment = Enum.TextYAlignment.Center
+					Message.TextXAlignment = Enum.TextXAlignment.Center
+					Message.TextWrapped = true
+					Message.TextSize = 24
+				else
+					Message.Size = UDim2.new(1, -24, 0, 88)
+					Message.Position = UDim2.new(0, 12, 0, 20)
+					Message.TextWrapped = true
+					Message.TextSize = 22
+				end
 			end
-			LeftButton.Size = UDim2.new(0, ButtonWidth, 0, 48)
-			RightButton.Size = UDim2.new(0, ButtonWidth, 0, 48)
-			LeftButton.Position = UDim2.new(0.5, -(ButtonWidth + 6), 0, 150)
-			RightButton.Position = UDim2.new(0.5, 6, 0, 150)
+			LeftButton.Size = UDim2.new(0, ButtonWidth, 0, ButtonHeight)
+			RightButton.Size = UDim2.new(0, ButtonWidth, 0, ButtonHeight)
+			LeftButton.Position = UDim2.new(0.5, -(ButtonWidth + ButtonGap / 2), 0, ButtonTop)
+			RightButton.Position = UDim2.new(0.5, ButtonGap / 2, 0, ButtonTop)
 			for _, Button in ipairs({LeftButton, RightButton}) do
 				local Label = Button:FindFirstChildWhichIsA("TextLabel", true)
 				if Label then
@@ -17511,6 +17701,7 @@ ShowAlert =
 			-- Keep the selected blue Roblox button asset for the entire lifetime
 			-- of the error dialog; don't rely on hover/selection state.
 			Button.Image = BUTTON_SELECTED_IMAGE
+			Button:SetAttribute("KeepBlue", true)
 			Button.ImageColor3 = Color3.new(1, 1, 1)
 			Button.AutoButtonColor = false
 		end
@@ -17538,7 +17729,9 @@ PushPage =
 		Hub.PageView.ScrollBarThickness = 0
 		SwitchToPage(Page, true, true)
 		if Hub.InConfirmation then
-			if IsMobile then
+			if IsPhone then
+				ResizeHub()
+			elseif IsMobile then
 				-- Phones and tablets use mobile-style confirmation buttons at the bottom.
 				PositionMobileConfirmationButtons()
 			else
@@ -17816,15 +18009,15 @@ ConfigureMobileActionButtons = function()
                 end
                 local Label = Button:FindFirstChild(Button.Name .. "TextLabel")
                 if Label then
-                    Label.TextSize = 18
+                    Label.TextSize = 22
                     Label.TextWrapped = true
                     Label.TextScaled = true
                     local LabelConstraint = Label:FindFirstChildOfClass("UITextSizeConstraint")
                     if LabelConstraint then
-                        LabelConstraint.MinTextSize = 15
-                        LabelConstraint.MaxTextSize = 18
+                        LabelConstraint.MinTextSize = 16
+                        LabelConstraint.MaxTextSize = 22
                     else
-                        Create("UITextSizeConstraint", {Parent = Label, MinTextSize = 15, MaxTextSize = 18})
+                        Create("UITextSizeConstraint", {Parent = Label, MinTextSize = 16, MaxTextSize = 22})
                     end
                     Label.TextXAlignment = Enum.TextXAlignment.Center
                     Label.TextYAlignment = Enum.TextYAlignment.Center
@@ -18443,6 +18636,582 @@ SetGameplayInputLocked =
 	end
 
 -- ============================================================
+-- NATIVE TOP-LEFT MENU BUTTON + ROBLOX'S OWN MENU
+--
+-- The custom X / hit-box used to sit at fixed coordinates.  On phones with a notch the
+-- Roblox top bar is pushed to the right by the safe-area inset, so the real Roblox logo was
+-- OUTSIDE the hit-box: tapping it opened Roblox's own menu (GuiService.MenuIsOpen = true).
+-- Our menu opened on top of it, but closing our menu never closed Roblox's, so the top bar
+-- kept showing only its "X" (everything else hidden) and never came back.
+-- ============================================================
+
+NativeMenuIconObject = nil
+NativeMenuIconRect = nil
+NativeMenuIconSearchStamp = 0
+NativeIconOriginProbe = nil
+NativeIconOriginProbeStamp = 0
+NativeIconHooked = setmetatable({}, {__mode = "k"})
+SystemMenuCloseSerial = 0
+SystemMenuClosingSince = nil
+LastCustomCloseAt = 0
+NativeCloseRunning = false
+NativeStuckSince = nil
+NativeWatchdogAttempts = 0
+
+-- A zero-size frame at our own (0,0): the origin of this ScreenGui's coordinates.
+GetOriginProbe =
+	function()
+		local Probe = NativeIconOriginProbe
+		if Probe and Probe.Parent then return Probe end
+		if not ScreenGui or not ScreenGui.Parent then return nil end
+		Probe = Create("Frame", {
+			Name = "OriginProbe",
+			Parent = ScreenGui,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Active = false,
+			Size = UDim2.fromOffset(0, 0),
+			Position = UDim2.fromOffset(0, 0),
+		})
+		NativeIconOriginProbe = Probe
+		NativeIconOriginProbeStamp = tick()
+		return Probe
+	end
+
+-- Left/right device safe area (camera cut-out, rounded corners) of a phone, in this
+-- ScreenGui's pixels.  This menu's ScreenGui ignores the safe area (so the dark backdrop
+-- fills the screen); a second, invisible ScreenGui that DOES respect it is measured.
+SafeInsetL = 0
+SafeInsetR = 0
+LastLayoutInsetL = 0
+LastLayoutInsetR = 0
+SafeAreaProbeGui = nil
+SafeAreaProbeFrame = nil
+SafeAreaProbeStamp = 0
+SafeAreaProbeFailed = false
+GetPhoneSafeInsets =
+	function()
+		if not IsPhone or SafeAreaProbeFailed or SafeFlag("NoSafeInsets") then return 0, 0 end
+		local Origin = GetOriginProbe()
+		if not Origin then return SafeInsetL, SafeInsetR end
+		if not (SafeAreaProbeFrame and SafeAreaProbeFrame.Parent) then
+			local Ok = pcall(function()
+				SafeAreaProbeGui = Create("ScreenGui", {
+					Name = "Settings2016SafeAreaProbe",
+					Parent = CoreGui,
+					DisplayOrder = -100,
+					IgnoreGuiInset = true,
+					ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets,
+					ResetOnSpawn = false,
+				})
+				Insert(Data.Objects, SafeAreaProbeGui)
+				SafeAreaProbeFrame = Create("Frame", {
+					Parent = SafeAreaProbeGui,
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					Active = false,
+					Size = UDim2.fromScale(1, 1),
+				})
+			end)
+			SafeAreaProbeStamp = tick()
+			if not Ok then
+				-- this client cannot do it: stop trying and leave nothing behind
+				SafeAreaProbeFrame = nil
+				SafeAreaProbeFailed = true
+				if SafeAreaProbeGui then pcall(function() SafeAreaProbeGui:Destroy() end) end
+				SafeAreaProbeGui = nil
+			end
+			return SafeInsetL, SafeInsetR
+		end
+		-- freshly created frames may not have a laid-out position yet
+		if tick() - SafeAreaProbeStamp < 0.2 or tick() - NativeIconOriginProbeStamp < 0.2 then
+			return SafeInsetL, SafeInsetR
+		end
+		local Ok, Left, Right, Full = pcall(function()
+			local Position, Size, OriginPosition = SafeAreaProbeFrame.AbsolutePosition, SafeAreaProbeFrame.AbsoluteSize, Origin.AbsolutePosition
+			local FullWidth = ScreenGui.AbsoluteSize.X
+			return Position.X - OriginPosition.X, (OriginPosition.X + FullWidth) - (Position.X + Size.X), FullWidth
+		end)
+		if Ok and type(Left) == "number" and type(Right) == "number" and type(Full) == "number" then
+			if Left >= 0 and Right >= 0 and Left <= 150 and Right <= 150 and Full > 0 and (Left + Right) < Full * 0.3 then
+				local NewLeft, NewRight = math.floor(Left + 0.5), math.floor(Right + 0.5)
+				if NewLeft ~= SafeInsetL or NewRight ~= SafeInsetR then
+					SafeInsetL, SafeInsetR = NewLeft, NewRight
+					Trace(string.format("phone safe area: left=%d right=%d", NewLeft, NewRight))
+				end
+			end
+		end
+		return SafeInsetL, SafeInsetR
+	end
+
+NativeMenuIconHeuristicStamp = 0
+
+-- Our own gui (this menu, the chat, the probes) is never the Roblox logo.
+IsOwnGuiObject =
+	function(Object)
+		local Current = Object
+		for _ = 1, 40 do
+			if not Current or Current == CoreGui then return false end
+			local Name = Current.Name
+			if type(Name) == "string" and (Name:sub(1, 12) == "Settings2016" or Name:sub(1, 10) == "LegacyChat" or Name:lower():find("chat", 1, true)) then
+				return true
+			end
+			Current = Current.Parent
+		end
+		-- the old chat controller puts its icon INSIDE the Roblox chat button: that is not the logo
+		local HasChatIcon = false
+		pcall(function()
+			for _, Child in ipairs(Object:GetDescendants()) do
+				if Child.Name:sub(1, 10) == "LegacyChat" then HasChatIcon = true break end
+			end
+		end)
+		return HasChatIcon
+	end
+
+-- When nothing usable sits at the expected path: the Roblox logo is the FIRST button of the
+-- top bar, i.e. the left-most button of logo size, a small margin to the right of the safe-area
+-- edge.  (The chat button, next to it, is a whole icon-width further right.)
+FindNativeMenuIconByGeometry =
+	function()
+		local Root = CoreGui:FindFirstChild("TopBarApp")
+		local Probe = GetOriginProbe()
+		if not Root or not Probe then return nil end
+		local Found = {}
+		local Ok = pcall(function()
+			local Origin = Probe.AbsolutePosition
+			local EdgeLeft = (IsPhone and SafeInsetL) or 0
+			for _, Object in ipairs(Root:GetDescendants()) do
+				if Object:IsA("GuiButton") and Object.Visible and not IsOwnGuiObject(Object) then
+					local Position, Size = Object.AbsolutePosition, Object.AbsoluteSize
+					local X, Y = Position.X - Origin.X, Position.Y - Origin.Y
+					if Size.X >= 28 and Size.X <= 64 and Size.Y >= 28 and Size.Y <= 64
+						and X >= EdgeLeft - 6 and X <= EdgeLeft + 32 and Y >= -30 and Y <= 70
+					then
+						table.insert(Found, {Object = Object, X = X + Size.X / 2, Y = Y + Size.Y / 2, Area = Size.X * Size.Y})
+					end
+				end
+			end
+		end)
+		if not Ok or #Found == 0 then return nil end
+		-- Several buttons may be layers of the same logo (same place): take the biggest of them.
+		-- Buttons at different places mean this is a guess between candidates: don't.
+		local Biggest = Found[1]
+		for _, Candidate in ipairs(Found) do
+			if math.abs(Candidate.X - Found[1].X) > 8 or math.abs(Candidate.Y - Found[1].Y) > 8 then
+				Trace("native menu icon: " .. tostring(#Found) .. " different candidates in the corner, not guessing")
+				return nil
+			end
+			if Candidate.Area > Biggest.Area then Biggest = Candidate end
+		end
+		return Biggest.Object
+	end
+
+FindNativeMenuIconObject =
+	function()
+		local Root = CoreGui:FindFirstChild("TopBarApp")
+		local App = Root and Root:FindFirstChild("TopBarApp")
+		local Holder = App and App:FindFirstChild("MenuIconHolder")
+		local Trigger = Holder and Holder:FindFirstChild("TriggerPoint")
+		local Hit = Trigger and Trigger:FindFirstChild("IconHitArea")
+		if not Hit and Root then
+			-- Other client builds nest it differently; search, but not on every pass.
+			local Now = tick()
+			if Now - NativeMenuIconSearchStamp >= 2 then
+				NativeMenuIconSearchStamp = Now
+				pcall(function() Hit = Root:FindFirstChild("IconHitArea", true) end)
+			end
+		end
+		if Hit then
+			local Ok, IsGui = pcall(function() return Hit:IsA("GuiObject") end)
+			if Ok and IsGui then return Hit end
+		end
+		if tick() - NativeMenuIconHeuristicStamp >= 2 then
+			NativeMenuIconHeuristicStamp = tick()
+			return FindNativeMenuIconByGeometry()
+		end
+		return nil
+	end
+
+-- Rectangle of the native menu icon in THIS ScreenGui's coordinates (last good value is
+-- cached, because a hidden top bar can report a zero size).  A zero-size probe frame at our
+-- own (0,0) gives the origin of our coordinate space, so the maths holds whatever GUI inset
+-- or safe-area offset the engine applies to AbsolutePosition.
+MeasureNativeMenuIcon =
+	function()
+		if not ScreenGui or not ScreenGui.Parent then return NativeMenuIconRect end
+		local Hit = NativeMenuIconObject
+		if not (Hit and Hit.Parent) then
+			Hit = FindNativeMenuIconObject()
+			NativeMenuIconObject = Hit
+		end
+		if not Hit then return NativeMenuIconRect end
+		local Probe = GetOriginProbe()
+		if not Probe then return NativeMenuIconRect end
+		-- A frame that was just created may not have a laid-out position yet.
+		if tick() - NativeIconOriginProbeStamp < 0.2 then return NativeMenuIconRect end
+		-- The button itself, then the frames around it: whichever has a believable size.
+		local FoundRect = false
+		local Candidates = {Hit, Hit.Parent, Hit.Parent and Hit.Parent.Parent}
+		for _, Candidate in ipairs(Candidates) do
+			local Ok, Rect = pcall(function()
+				if not Candidate:IsA("GuiObject") then return nil end
+				local Position, Size, Origin = Candidate.AbsolutePosition, Candidate.AbsoluteSize, Probe.AbsolutePosition
+				return {X = Position.X - Origin.X, Y = Position.Y - Origin.Y, W = Size.X, H = Size.Y}
+			end)
+			if Ok and Rect
+				and Rect.W >= 20 and Rect.W <= 96 and Rect.H >= 20 and Rect.H <= 96
+				and Rect.X >= -40 and Rect.X <= 400 and Rect.Y >= -60 and Rect.Y <= 160
+			then
+				local Previous = NativeMenuIconRect
+				NativeMenuIconRect = Rect
+				FoundRect = true
+				if not Previous or math.abs(Previous.X - Rect.X) > 1 or math.abs(Previous.Y - Rect.Y) > 1 or math.abs(Previous.W - Rect.W) > 1 then
+					Trace(string.format("native menu icon rect (%s): x=%.0f y=%.0f w=%.0f h=%.0f", tostring(Candidate.Name), Rect.X, Rect.Y, Rect.W, Rect.H))
+				end
+				break
+			end
+		end
+		-- nothing believable at the expected place: look at what is really in the top-left corner
+		if not FoundRect and tick() - NativeMenuIconHeuristicStamp >= 2 then
+			NativeMenuIconHeuristicStamp = tick()
+			local Guess = FindNativeMenuIconByGeometry()
+			if Guess and Guess ~= Hit then
+				Trace("native menu icon: using " .. Guess:GetFullName() .. " (nothing usable at the expected path)")
+				NativeMenuIconObject = Guess
+			end
+		end
+		return NativeMenuIconRect
+	end
+
+-- Where the 30x30 X and its hit-box go.  The fixed legacy position is kept whenever its
+-- 40x40 hit-box already covers the native icon (desktop, most tablets).  Otherwise both
+-- follow the native icon so a tap on the Roblox logo always lands on OUR button.
+GetSystemMenuGeometry =
+	function()
+		local LegacyX = IsPhone and MOBILE_SYSTEM_MENU_OFFSET_X or SYSTEM_MENU_OFFSET_X
+		local LegacyY = SYSTEM_MENU_OFFSET_Y
+		local Geometry = {
+			ButtonX = LegacyX, ButtonY = LegacyY,
+			HitX = LegacyX - 4, HitY = LegacyY - 4, HitW = 40, HitH = 40,
+		}
+		if IsPhone and not SafeAreaProbeFailed and not SafeFlag("NoLogoAnchor") then
+			-- The logo sits one fixed distance inside the camera cut-out.  Placing the X and the
+			-- tap area from that does not depend on finding Roblox's own button (whose name and
+			-- place change between builds), so they never jump around.
+			local InsetL = 0
+			if GetPhoneSafeInsets then
+				local InsetOk, Left = pcall(GetPhoneSafeInsets)
+				if InsetOk and type(Left) == "number" then InsetL = Left end
+			end
+			local CenterX, CenterY = InsetL + PHONE_LOGO_CENTER_X, PHONE_LOGO_CENTER_Y
+			Geometry.ButtonX = math.floor(CenterX - 15 + 0.5)
+			Geometry.ButtonY = math.floor(CenterY - 15 + 0.5)
+			Geometry.HitW, Geometry.HitH = 46, 44
+			Geometry.HitX = math.floor(CenterX - Geometry.HitW / 2 + 0.5)
+			Geometry.HitY = math.floor(CenterY - Geometry.HitH / 2 + 0.5)
+			return Geometry
+		end
+		local Rect = MeasureNativeMenuIcon()
+		if Rect then
+			local Covered =
+				Geometry.HitX <= Rect.X and Geometry.HitY <= Rect.Y
+				and Geometry.HitX + Geometry.HitW >= Rect.X + Rect.W
+				and Geometry.HitY + Geometry.HitH >= Rect.Y + Rect.H
+			if not Covered then
+				local CenterX, CenterY = Rect.X + Rect.W / 2, Rect.Y + Rect.H / 2
+				Geometry.HitW = math.max(40, Rect.W + 4)
+				Geometry.HitH = math.max(40, Rect.H + 4)
+				Geometry.HitX = math.floor(CenterX - Geometry.HitW / 2 + 0.5)
+				Geometry.HitY = math.floor(CenterY - Geometry.HitH / 2 + 0.5)
+				Geometry.ButtonX = math.floor(CenterX - 15 + 0.5)
+				Geometry.ButtonY = math.floor(CenterY - 15 + 0.5)
+			end
+		end
+		return Geometry
+	end
+
+ApplySystemMenuHitboxGeometry =
+	function()
+		if not SystemMenuHitbox then return end
+		local Geometry = GetSystemMenuGeometry()
+		SystemMenuHitbox.Position = UDim2.fromOffset(Geometry.HitX, Geometry.HitY)
+		SystemMenuHitbox.Size = UDim2.fromOffset(Geometry.HitW, Geometry.HitH)
+	end
+
+NativeMenuIsOpen =
+	function()
+		local Ok, Open = pcall(function() return GuiService.MenuIsOpen end)
+		return Ok and Open == true
+	end
+
+-- Is Roblox's SETTINGS menu (not some prompt or other menu) the open one?  true / false, or nil
+-- when the client does not tell us (the settings module cannot be required).
+GetNativeHubVisible =
+	function()
+		local Result = nil
+		pcall(function()
+			local RobloxGui = CoreGui:FindFirstChild("RobloxGui")
+			local Modules = RobloxGui and RobloxGui:FindFirstChild("Modules")
+			local SettingsFolder = Modules and Modules:FindFirstChild("Settings")
+			local HubModule = SettingsFolder and SettingsFolder:FindFirstChild("SettingsHub")
+			if not HubModule then return end
+			local Loaded = require(HubModule)
+			if type(Loaded) ~= "table" then return end
+			local Visible = Loaded.Visible
+			if Visible == nil and type(Loaded.GetVisibility) == "function" then
+				Visible = Loaded:GetVisibility()
+			end
+			if type(Visible) == "boolean" then Result = Visible end
+		end)
+		return Result
+	end
+
+-- A Roblox prompt (Favorite Item ...) or another menu keeps MenuIsOpen true while the settings
+-- menu is closed and ours is not showing: the top bar would show a lone X.
+IsPromptHoldingMenu =
+	function()
+		if not Hub or Hub.Visible or SystemMenuButtonClosing == true then return false end
+		if Hub.OpenedByNative == true or Hub.NativeMuteTransaction or NativeCloseRunning then return false end
+		if not NativeMenuIsOpen() then return false end
+		return GetNativeHubVisible() == false
+	end
+
+-- Fires a signal of the native menu icon the way a tap would (all Lua handlers connected to it).
+FireNativeIconSignal =
+	function(SignalName)
+		local Hit = NativeMenuIconObject
+		if not (Hit and Hit.Parent) then Hit = FindNativeMenuIconObject() end
+		if not Hit then error("native menu icon not found") end
+		local Signal = Hit[SignalName]
+		-- Our own click hook must not treat this as a user tap.
+		Hub.NativeSyntheticUntil = tick() + 0.3
+		if type(firesignal) == "function" then
+			firesignal(Signal)
+			return
+		end
+		if type(getconnections) == "function" then
+			local Fired = 0
+			for _, Connection in ipairs(getconnections(Signal)) do
+				local Ok = false
+				if Connection.Fire then Ok = pcall(function() Connection:Fire() end) end
+				if not Ok and Connection.Function then Ok = pcall(Connection.Function) end
+				if Ok then Fired = Fired + 1 end
+			end
+			if Fired > 0 then return end
+		end
+		error("firesignal/getconnections not available")
+	end
+
+-- Closes Roblox's own SETTINGS menu so its top bar leaves the "menu open" state.
+-- GuiService.MenuIsOpen is also true while other menus are open (emotes, inspect ...), so the
+-- state-changing steps only run when we KNOW the settings menu is the open one (Hub.OpenedByNative:
+-- it was opened by a tap on the Roblox logo or the Back button).  The first step only SETS the
+-- settings hub closed, so it is always safe.  Every step is verified before the next one runs;
+-- toggling steps are only used while the menu really is open, so a closed menu is never re-opened.
+CloseNativeMenu =
+	function(Reason)
+		if NativeCloseRunning then return end
+		local WasOpen = NativeMenuIsOpen()
+		local Owned = Hub.OpenedByNative == true
+		if not WasOpen and not Owned then return end
+		NativeCloseRunning = true
+		local PreviousSuppress = Hub.SuppressNativeOpenUntil or 0
+		-- Roblox events caused by closing its own menu must not reopen ours.
+		Hub.SuppressNativeOpenUntil = math.max(PreviousSuppress, tick() + 3)
+		Spawn(function()
+			local Ok, Err = pcall(function()
+				Trace("native close: begin (" .. tostring(Reason) .. ", MenuIsOpen=" .. tostring(WasOpen) .. ", settings menu opened by Roblox=" .. tostring(Owned) .. ")")
+				local function WaitClosed(Seconds)
+					local Deadline = tick() + Seconds
+					while NativeMenuIsOpen() do
+						if tick() >= Deadline then return false end
+						Wait(0.05)
+					end
+					return true
+				end
+				local HubClosedByModule = false
+				local Steps = {
+					{Name = "SettingsHub:SetVisibility(false)", Seconds = 0.35, Run = function()
+						local RobloxGui = CoreGui:FindFirstChild("RobloxGui")
+						local Modules = RobloxGui and RobloxGui:FindFirstChild("Modules")
+						local SettingsFolder = Modules and Modules:FindFirstChild("Settings")
+						local HubModule = SettingsFolder and SettingsFolder:FindFirstChild("SettingsHub")
+						if not HubModule then error("SettingsHub module not found") end
+						local Loaded = require(HubModule)
+						if type(Loaded) ~= "table" or type(Loaded.SetVisibility) ~= "function" then
+							error("SettingsHub has no SetVisibility")
+						end
+						Loaded:SetVisibility(false, true)
+						-- The settings hub says it is closed: whatever keeps MenuIsOpen true now is something
+						-- else (a Roblox prompt such as "Favorite Item", the emotes menu ...), not ours to touch.
+						local HubVisible = Loaded.Visible
+						if HubVisible == nil and type(Loaded.GetVisibility) == "function" then
+							local GotVisible, GotValue = pcall(function() return Loaded:GetVisibility() end)
+							if GotVisible then HubVisible = GotValue end
+						end
+						if HubVisible == false then HubClosedByModule = true end
+					end},
+					{Name = "native icon Activated", Toggle = true, Seconds = 0.5, Run = function()
+						FireNativeIconSignal("Activated")
+					end},
+					{Name = "native icon MouseButton1Click", Toggle = true, Seconds = 0.5, Run = function()
+						FireNativeIconSignal("MouseButton1Click")
+					end},
+					{Name = "GuiService:SetMenuIsOpen(false)", Seconds = 0.35, Run = function()
+						local Worked = false
+							local MenuNames = {"SettingsMenu", "InGameMenu", "Settings"}
+							-- the unnamed menu is only touched while the settings hub itself is open (a prompt may own it)
+							if not HubClosedByModule then MenuNames[#MenuNames + 1] = "" end
+							for _, MenuName in ipairs(MenuNames) do
+							if pcall(function() GuiService:SetMenuIsOpen(false, MenuName) end) then Worked = true end
+							if not NativeMenuIsOpen() then break end
+						end
+						if not Worked then error("GuiService:SetMenuIsOpen is not available") end
+					end},
+					{Name = "Escape key", MobileOnly = true, Toggle = true, Seconds = 0.5, Run = function()
+						local VIM = game:GetService("VirtualInputManager")
+						VIM:SendKeyEvent(true, Enum.KeyCode.Escape, false, game)
+						Wait(0.05)
+						VIM:SendKeyEvent(false, Enum.KeyCode.Escape, false, game)
+					end},
+				}
+				local Closed = false
+				for Index, Step in ipairs(Steps) do
+					-- Step 1 also runs when MenuIsOpen reads false (it only SETS the state).
+					-- The rest need proof that it is Roblox's settings menu that is open.
+					if Index == 1 or (Owned and not (Step.MobileOnly and not IsMobile) and not (Step.Toggle and HubClosedByModule)) then
+						if Index > 1 and not NativeMenuIsOpen() then Closed = true break end
+						local StepOk, StepErr = pcall(Step.Run)
+						Trace("native close: " .. Step.Name .. (StepOk and " ok" or (" failed: " .. tostring(StepErr))))
+						-- A step that could not even run costs no waiting time.
+						if StepOk and WaitClosed(Step.Seconds) then Closed = true break end
+					end
+				end
+				Closed = Closed or not NativeMenuIsOpen()
+				if Closed then Hub.OpenedByNative = false end
+				Trace("native close: " .. (Closed and "done" or "STILL OPEN"))
+			end)
+			if not Ok then Trace("native close error: " .. tostring(Err)) end
+			Hub.SuppressNativeOpenUntil = math.max(PreviousSuppress, tick() + 0.4)
+			NativeCloseRunning = false
+		end)
+	end
+
+-- Hooks Roblox's own menu icon (idempotent).  A tap on it that lands here means the tap did
+-- not hit our hit-box.
+HookNativeIcon =
+	function(Hit)
+		if not Hit or NativeIconHooked[Hit] then return end
+		local IsButtonOk, IsButton = pcall(function() return Hit:IsA("GuiButton") end)
+		if not IsButtonOk or not IsButton then return end
+		NativeIconHooked[Hit] = true
+		Connect(Hit.MouseButton1Down, function()
+			if Hub and Hub.NativeMuteTransaction then return end
+			-- Was Roblox's SETTINGS menu already open (top bar showing its X) when this tap began?
+			Hub.NativeOpenAtDown = NativeMenuIsOpen() and Hub.OpenedByNative == true
+			Hub.SuppressNativeOpenUntil = tick() + 1.0
+			HideNativeSystemMenuButtons()
+		end)
+		Connect(Hit.MouseButton1Click, function()
+			if Hub and Hub.NativeMuteTransaction then return end
+			if tick() < (Hub.NativeSyntheticUntil or 0) then return end
+			Hub.SuppressNativeOpenUntil = tick() + 1.0
+			local Target = not Hub.Visible
+			if Hub.NativeOpenAtDown and not Hub.Visible then
+				-- The top bar was showing the leftover X of Roblox's menu: this tap only
+				-- dismisses it (Roblox closes its menu itself); don't open ours as well.
+				Target = false
+			end
+			Hub.NativeOpenAtDown = nil
+			Hub.NativeMenuTarget = Target
+			if Target then Hub.OpenedByNative = true end
+			task.defer(function()
+				SetVisibility(Target, IsMobile and not Target)
+				if Hub.NativeMenuTarget == Target then Hub.NativeMenuTarget = nil end
+			end)
+		end)
+	end
+
+-- Ends the slide-out: hides the menu parts, brings the Roblox top bar back, hides the X.
+-- Safe to call more than once.
+FinishCustomMenuClose =
+	function()
+		if Hub.Visible then return end
+		Hub.HubBar.Visible = false
+		Hub.BottomButtonFrame.Visible = false
+		Hub.PageClipper.Visible = false
+		if HomeButton then HomeButton.Visible = false end
+		Hub.Shield.Visible = false
+		Hub.Shield.Position = SETTINGS_INACTIVE_POSITION
+		SystemMenuButtonClosing = false
+		SystemMenuClosingSince = nil
+		SyncTopBarAppVisibility()
+		if RefreshVoiceBetaBadgeVisibility then RefreshVoiceBetaBadgeVisibility() end
+		SetRecorderOverlayVisibility(true)
+		-- Keep the invisible hit-box permanently over the native top-left button.
+		if SystemMenuHitbox then
+			SystemMenuHitbox.Visible = true
+			ApplySystemMenuHitboxGeometry()
+		end
+		if SystemMenuButton then SystemMenuButton.Visible = false end
+	end
+
+-- Runs every 0.25s from the alignment loop.
+SystemMenuWatchdog =
+	function()
+		if not Hub then return end
+		local Now = tick()
+		-- 1. a closing slide that never reported completion
+		if not Hub.Visible and SystemMenuButtonClosing == true then
+			SystemMenuClosingSince = SystemMenuClosingSince or Now
+			if Now - SystemMenuClosingSince > 1.2 then
+				Trace("watchdog: close animation never finished")
+				FinishCustomMenuClose()
+			end
+			return
+		end
+		SystemMenuClosingSince = nil
+		if Hub.Visible then
+			NativeStuckSince = nil
+			return
+		end
+		if not TopLeftDumped and tick() - MenuStartTick > 6 then
+			TopLeftDumped = true
+			DumpTopLeftToTrace()
+		end
+		-- 2. fully closed: the Roblox top bar must be on (unless a Roblox prompt holds MenuIsOpen:
+		--    the bar would show nothing but an X until the prompt is answered)
+		local Holding = false
+		if IsPromptHoldingMenu() then
+			Hub.PromptSince = Hub.PromptSince or Now
+			Holding = Now - Hub.PromptSince >= 0.6 and Now - Hub.PromptSince < 120
+		else
+			Hub.PromptSince = nil
+		end
+		if Holding ~= (Hub.PromptHold == true) then
+			Trace(Holding and "a Roblox prompt is open: top bar hidden until it is answered" or "prompt gone: top bar back")
+		end
+		Hub.PromptHold = Holding
+		SetTopBarAppEnabled(not Holding)
+		-- 3. Roblox's own menu is still open behind the closed custom one (top bar stuck on "X")
+		if NativeMenuIsOpen() and not NativeCloseRunning and Now >= (Hub.SuppressNativeOpenUntil or 0) then
+			NativeStuckSince = NativeStuckSince or Now
+			-- Full retries only with proof that it is Roblox's settings menu; otherwise one
+			-- harmless "set the settings hub closed" attempt (MenuIsOpen is true for other menus too).
+			local MaxAttempts = Hub.OpenedByNative and 4 or 1
+			if Now - NativeStuckSince >= 1.0 and NativeWatchdogAttempts < MaxAttempts then
+				NativeWatchdogAttempts = NativeWatchdogAttempts + 1
+				NativeStuckSince = Now
+				Trace("watchdog: Roblox menu still open behind the closed custom menu")
+				CloseNativeMenu("watchdog")
+			end
+		else
+			NativeStuckSince = nil
+			if not NativeMenuIsOpen() then NativeWatchdogAttempts = 0 end
+		end
+	end
+
+-- ============================================================
 -- SET VISIBILITY
 -- ============================================================
 
@@ -18453,6 +19222,9 @@ SetVisibility =
 		Hub.Visible = Visible
 		Hub.Modal.Visible = Visible
 		if RefreshVoiceBetaBadgeVisibility then RefreshVoiceBetaBadgeVisibility() end
+		-- Any "finish closing" timer started by an earlier call is stale from here on.
+		SystemMenuCloseSerial = SystemMenuCloseSerial + 1
+		local CloseSerial = SystemMenuCloseSerial
 
 		if not Visible then
 			Hub.InInviteMenu = false
@@ -18475,13 +19247,13 @@ SetVisibility =
 
 		if Visible then
 			SystemMenuButtonClosing = false
+			Hub.PromptHold, Hub.PromptSince = false, nil
 			-- ESC menu is open: hide the recorder overlay, but keep its timer
 			-- and recording state running.
 			SetRecorderOverlayVisibility(false)
 			if SystemMenuHitbox then
 				SystemMenuHitbox.Visible = true
-				SystemMenuHitbox.Position = UDim2.fromOffset(GetSystemMenuButtonOffsetX() - 4, SYSTEM_MENU_OFFSET_Y - 4)
-				SystemMenuHitbox.Size = UDim2.fromOffset(40, 40)
+				ApplySystemMenuHitboxGeometry()
 			end
 			Trace("open: hide native settings")
 			HideNativeSettingsMenu()
@@ -18498,6 +19270,8 @@ SetVisibility =
 				HomeButton.Visible = HomeButtonEnabled and not IsMobile and not Hub.InInviteMenu and not Hub.InConfirmation
 			end
 			if SystemMenuButton then
+				local Geometry = GetSystemMenuGeometry()
+				SystemMenuButton.Position = UDim2.fromOffset(Geometry.ButtonX, Geometry.ButtonY)
 				SystemMenuButton.Visible = true
 				SystemMenuButton.Size = UDim2.fromOffset(30, 30)
 			end
@@ -18539,13 +19313,20 @@ SetVisibility =
 			-- It is re-enabled only after the closing tween has actually finished.
 			Trace("close: topbar off")
 			SetTopBarAppEnabled(false)
+			-- Roblox's OWN menu is usually open behind ours when it was opened by tapping the
+			-- real logo or with the Back button. Close it now, while the top bar is still
+			-- hidden, otherwise the bar comes back showing only an "X" and never recovers.
+			Trace("close: native menu sync")
+			LastCustomCloseAt = tick()
+			CloseNativeMenu("custom menu closing")
 			Trace("close: coregui restore")
 			SetTopbarCoreGuiEnabled(true)
 			Trace("close: coregui restored")
 			if SystemMenuButton then
 				-- Keep the visible 30x30 SystemMenuButton unchanged for the entire
 				-- closing tween. Only hide it in the tween completion callback below.
-				SystemMenuButton.Position = UDim2.fromOffset(GetSystemMenuButtonOffsetX(), SYSTEM_MENU_OFFSET_Y)
+				local Geometry = GetSystemMenuGeometry()
+				SystemMenuButton.Position = UDim2.fromOffset(Geometry.ButtonX, Geometry.ButtonY)
 				SystemMenuButton.Size = UDim2.fromOffset(30, 30)
 				SystemMenuButton.Active = true
 				SystemMenuButton.Selectable = true
@@ -18571,29 +19352,20 @@ SetVisibility =
 				if RefreshVoiceBetaBadgeVisibility then RefreshVoiceBetaBadgeVisibility() end
 				if SystemMenuHitbox then
 					SystemMenuHitbox.Visible = true
-					SystemMenuHitbox.Position = UDim2.fromOffset(GetSystemMenuButtonOffsetX() - 4, SYSTEM_MENU_OFFSET_Y - 4)
-					SystemMenuHitbox.Size = UDim2.fromOffset(40, 40)
+					ApplySystemMenuHitboxGeometry()
 				end
 				if SystemMenuButton then SystemMenuButton.Visible = true end
 				TweenTo(Hub.Shield, SETTINGS_INACTIVE_POSITION, Enum.EasingDirection.In, Enum.EasingStyle.Quad, 0.4, function()
-					if not Hub.Visible then
-						-- Hide the Leave/Resume footer and page only after the desktop slide ends.
-						Hub.HubBar.Visible = false
-						Hub.BottomButtonFrame.Visible = false
-						Hub.PageClipper.Visible = false
-						if HomeButton then HomeButton.Visible = false end
-						Hub.Shield.Visible = false
-						SystemMenuButtonClosing = false
-						SyncTopBarAppVisibility()
-						if RefreshVoiceBetaBadgeVisibility then RefreshVoiceBetaBadgeVisibility() end
-						SetRecorderOverlayVisibility(true)
-						-- Keep the invisible 40x40 shield permanently over the native top-left button.
-						if SystemMenuHitbox then
-							SystemMenuHitbox.Visible = true
-							SystemMenuHitbox.Position = UDim2.fromOffset(GetSystemMenuButtonOffsetX() - 4, SYSTEM_MENU_OFFSET_Y - 4)
-							SystemMenuHitbox.Size = UDim2.fromOffset(40, 40)
-						end
-						if SystemMenuButton then SystemMenuButton.Visible = false end
+					if SystemMenuCloseSerial == CloseSerial then
+						FinishCustomMenuClose()
+					end
+				end)
+				-- The slide's completion callback is the only thing that used to bring the top
+				-- bar back. If the client never reports the tween as finished, finish anyway.
+				task.delay(0.9, function()
+					if SystemMenuCloseSerial == CloseSerial and SystemMenuButtonClosing == true then
+						Trace("close: tween callback missing; finishing the close")
+						FinishCustomMenuClose()
 					end
 				end)
 			end
@@ -18715,50 +19487,22 @@ AlignSystemMenuButton =
 			return
 		end
 
-		SystemMenuButton.Visible = true
+		-- The visual X exists only while the menu is open or sliding closed. After the
+		-- tween SetVisibility/FinishCustomMenuClose hides it; only the hit-box stays.
+		-- Decided first: nothing that can fail below (the geometry) may leave the X on screen.
+		SystemMenuButton.Visible = (Hub.Visible == true) or (SystemMenuButtonClosing == true)
+
+		-- The X follows the native top-left button; the invisible hit-box always covers it.
+		local Geometry = GetSystemMenuGeometry()
+		SystemMenuButton.Position = UDim2.fromOffset(Geometry.ButtonX, Geometry.ButtonY)
 		SystemMenuButton.Size = UDim2.fromOffset(30, 30)
+		pcall(function()
+			SystemMenuButton.ImageTransparency = 0
+		end)
 		if SystemMenuHitbox then
 			SystemMenuHitbox.Visible = true
-			SystemMenuHitbox.Position = UDim2.fromOffset(GetSystemMenuButtonOffsetX() - 4, SYSTEM_MENU_OFFSET_Y - 4)
-			SystemMenuHitbox.Size = UDim2.fromOffset(40, 40)
-		end
-
-		if Hub.Visible then
-			SystemMenuButton.Position =
-				UDim2.fromOffset(
-					GetSystemMenuButtonOffsetX(),
-					SYSTEM_MENU_OFFSET_Y
-				)
-			SystemMenuButton.Size = UDim2.fromOffset(30, 30)
-			pcall(function()
-				SystemMenuButton.ImageTransparency = 0
-			end)
-		else
-			-- While closing, preserve the normal visible 30x30 button. After the
-			-- tween completes, SetVisibility hides the visual button permanently.
-			if SystemMenuButtonClosing then
-				SystemMenuButton.Position =
-					UDim2.fromOffset(
-						SYSTEM_MENU_OFFSET_X,
-						SYSTEM_MENU_OFFSET_Y
-					)
-				SystemMenuButton.Size = UDim2.fromOffset(30, 30)
-				pcall(function()
-					SystemMenuButton.ImageTransparency = 0
-				end)
-				SystemMenuButton.Visible = true
-			else
-				SystemMenuButton.Position =
-					UDim2.fromOffset(
-						SYSTEM_MENU_OFFSET_X,
-						SYSTEM_MENU_OFFSET_Y
-					)
-				SystemMenuButton.Size = UDim2.fromOffset(30, 30)
-				pcall(function()
-					SystemMenuButton.ImageTransparency = 0
-				end)
-				SystemMenuButton.Visible = false
-			end
+			SystemMenuHitbox.Position = UDim2.fromOffset(Geometry.HitX, Geometry.HitY)
+			SystemMenuHitbox.Size = UDim2.fromOffset(Geometry.HitW, Geometry.HitH)
 		end
 
 		-- Keep the real/native button hidden on every platform.
@@ -18813,12 +19557,42 @@ Connect(CoreGui.DescendantAdded, function(Descendant)
 		end)
 	end
 end)
+AlignLoopErrors = 0
+AlignLoopLastError = nil
 Spawn(function()
 	-- Capture the original button so this worker ends when this run is cleaned up.
 	local WorkerSystemMenuButton = SystemMenuButton
+	-- Every step of a pass is guarded on its own: an error in one step (which can repeat on every
+	-- pass) used to stop the steps after it, the watchdog among them (the X then stayed on screen
+	-- and the top bar stayed stuck).
+	local function Step(Name, Fn)
+		local StepOk, StepErr = pcall(Fn)
+		if not StepOk then
+			AlignLoopErrors = AlignLoopErrors + 1
+			AlignLoopLastError = Name .. ": " .. tostring(StepErr)
+			Trace("align loop error in " .. AlignLoopLastError)
+		end
+	end
 	while WorkerSystemMenuButton and WorkerSystemMenuButton.Parent do
-		AlignSystemMenuButton()
-		PositionRecorderGui()
+		Step("align", AlignSystemMenuButton)
+		Step("recorder", function() PositionRecorderGui() end)
+		Step("hook", function()
+			if NativeMenuIconObject then HookNativeIcon(NativeMenuIconObject) end
+		end)
+		-- the safe area becomes known a moment after start-up and changes on rotation
+		Step("insets", function()
+			if IsPhone then
+				local InsetL, InsetR = GetPhoneSafeInsets()
+				if math.abs(InsetL - LastLayoutInsetL) > 0.5 or math.abs(InsetR - LastLayoutInsetR) > 0.5 then
+					LastLayoutInsetL, LastLayoutInsetR = InsetL, InsetR
+					ResizeHub()
+				end
+			end
+		end)
+		Step("watchdog", SystemMenuWatchdog)
+		Step("skins", function()
+			if IsMobile then ResetStyledButtonSkins() end
+		end)
 		Wait(0.25)
 	end
 end)
@@ -18997,7 +19771,7 @@ HookNativeMenu =
 				local Target = Hub.NativeMenuTarget
 				Hub.NativeMenuTarget = nil
 				if Target == nil then Target = true end
-				if Hub.Visible ~= Target then SetVisibility(Target, IsMobile) end
+				if Hub.Visible ~= Target then SetVisibility(Target, IsMobile and not Target) end
 			end)
 		end
 
@@ -19007,9 +19781,17 @@ HookNativeMenu =
 			if not IsGuiOk or not IsGui then return end
 			HookedRoots[Object] = true
 			Connect(Object:GetPropertyChangedSignal("Visible"), function()
-				if Object.Visible then NativeMenuOpened() end
+				if Object.Visible then
+					-- The settings menu itself (not just some menu: MenuIsOpen is also true for emotes,
+					-- inspect ...) became visible: ours must close it again when it closes.
+					Hub.OpenedByNative = true
+					NativeMenuOpened()
+				end
 			end)
-			if Object.Visible then NativeMenuOpened() end
+			if Object.Visible then
+				Hub.OpenedByNative = true
+				NativeMenuOpened()
+			end
 		end
 
 		local function HookShield(NewShield)
@@ -19045,7 +19827,32 @@ HookNativeMenu =
 			Connect(GuiService:GetPropertyChangedSignal("MenuIsOpen"), function()
 				local Open = false
 				pcall(function() Open = GuiService.MenuIsOpen == true end)
-				if Open then NativeMenuOpened() end
+				if Open then
+					-- MenuIsOpen is also true for prompts (Favorite Item ...) and other menus.  Give a
+					-- Settings root a moment to show up (its own handler opens our menu at once), then
+					-- only follow when Roblox's settings menu really is the open one.
+					task.delay(0.3, function()
+						if not Hub or Hub.Visible then return end
+						if Hub.OpenedByNative ~= true and GetNativeHubVisible() == false then
+							Trace("MenuIsOpen is true but Roblox's settings menu is closed (a prompt?): the custom menu stays closed")
+							return
+						end
+						NativeMenuOpened()
+					end)
+				else
+					local WasOwned = Hub.OpenedByNative == true
+					Hub.OpenedByNative = false
+					-- Roblox's settings menu closed by itself (Android Back button) while ours is still
+					-- showing: follow it, so Back opens and closes the menu like a toggle.
+					if WasOwned and Hub.Visible and not NativeCloseRunning and tick() >= (Hub.SuppressNativeOpenUntil or 0) then
+						task.defer(function()
+							if Hub.Visible and not NativeCloseRunning and not NativeMenuIsOpen() then
+								Trace("Roblox closed its menu -> closing the custom menu")
+								SetVisibility(false, IsMobile)
+							end
+						end)
+					end
+				end
 			end)
 		end)
 
@@ -19055,23 +19862,12 @@ HookNativeMenu =
 		local Holder = TopBarApp and TopBarApp:FindFirstChild("MenuIconHolder")
 		local Trigger = Holder and Holder:FindFirstChild("TriggerPoint")
 		local Hit = Trigger and Trigger:FindFirstChild("IconHitArea")
-		if Hit and Hit:IsA("GuiButton") then
-			Connect(Hit.MouseButton1Down, function()
-				if Hub and Hub.NativeMuteTransaction then return end
-				Hub.SuppressNativeOpenUntil = tick() + 1.0
-				HideNativeSystemMenuButtons()
-			end)
-			Connect(Hit.MouseButton1Click, function()
-				if Hub and Hub.NativeMuteTransaction then return end
-				Hub.SuppressNativeOpenUntil = tick() + 1.0
-				local Target = not Hub.Visible
-				Hub.NativeMenuTarget = Target
-				task.defer(function()
-					SetVisibility(Target, IsMobile)
-					if Hub.NativeMenuTarget == Target then Hub.NativeMenuTarget = nil end
-				end)
-			end)
+		if Hit then
+			NativeMenuIconObject = NativeMenuIconObject or Hit
+			HookNativeIcon(Hit)
 		end
+		-- The top bar can be (re)built after this script started; the alignment loop keeps
+		-- hooking whatever icon it finds (HookNativeIcon ignores objects it has already hooked).
 	end
 
 if IsMobile then
@@ -19138,6 +19934,56 @@ function Api:GetVisibility()
 	return Hub.Visible
 end
 
+-- One line saying what the menu thinks is going on.  The loader shows it on screen (a small status
+-- line), so a screenshot or recording of a problem also tells which build runs and in what state.
+function Api:GetStatus()
+	local Parts = {}
+	local function Add(Text) Parts[#Parts + 1] = Text end
+	local function YesNo(Value) return Value and "Y" or "N" end
+	pcall(function()
+		local Env = getgenv and getgenv()
+		Add(tostring(Env and Env.Settings2016Version or "?"))
+	end)
+	pcall(function()
+		local Camera = workspace.CurrentCamera
+		local Size = Camera and Camera.ViewportSize or Vector2.new(0, 0)
+		local Kind = IsPhone and "phone" or (IsTablet and "tablet" or (IsMobile and "mobile" or "pc"))
+		Add(string.format("%s %.0fx%.0f", Kind, Size.X, Size.Y))
+		if IsPhone then
+			Add(string.format("safe %.0f/%.0f%s", SafeInsetL, SafeInsetR, SafeAreaProbeFailed and "!" or ""))
+		end
+	end)
+	pcall(function()
+		Add(string.format("open:%s%s", YesNo(Hub.Visible), SystemMenuButtonClosing == true and "(closing)" or ""))
+	end)
+	pcall(function()
+		local NativeHub = GetNativeHubVisible()
+		Add(string.format("native:%s(hub:%s)", YesNo(NativeMenuIsOpen()), NativeHub == nil and "?" or YesNo(NativeHub)))
+	end)
+	pcall(function()
+		local Root = CoreGui:FindFirstChild("TopBarApp")
+		local App = Root and Root:FindFirstChild("TopBarApp")
+		local Enabled = nil
+		if App then pcall(function() Enabled = App.Enabled end) end
+		if Enabled == nil and Root then pcall(function() Enabled = Root.Enabled end) end
+		Add("bar:" .. (Enabled == nil and "?" or (Enabled and "on" or "off")))
+	end)
+	pcall(function()
+		Add(string.format("X:%s tap:%s", (SystemMenuButton and SystemMenuButton.Visible) and "on" or "off", (SystemMenuHitbox and SystemMenuHitbox.Visible) and "on" or "off"))
+	end)
+	pcall(function()
+		Add(string.format("prompt:%s byRoblox:%s closing:%s", YesNo(Hub.PromptHold == true), YesNo(Hub.OpenedByNative == true), YesNo(NativeCloseRunning == true)))
+	end)
+	pcall(function()
+		if (AlignLoopErrors or 0) > 0 then
+			Add(string.format("LOOP ERRORS x%d: %s", AlignLoopErrors, tostring(AlignLoopLastError):sub(1, 90)))
+		else
+			Add("loop:ok")
+		end
+	end)
+	return table.concat(Parts, " | ")
+end
+
 function Api:ReportPlayer(Player)
 	if OpenReportPlayer then OpenReportPlayer(Player) end
 end
@@ -19145,3 +19991,4 @@ end
 Api.Instance = Hub
 getgenv().Settings2016 = Api
 return Api
+-- end of 2023_esc_menu.lua (2023-esc-v5.7)
