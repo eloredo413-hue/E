@@ -6699,15 +6699,14 @@ local function CreateChat()
 	end
 
 	function this:FocusChatBarFromMobileEllipsis()
-		-- The mobile "..." button is a full switch to the keyboard-only chat input.
-		-- If the ChatWindow is open, close it first so the two states never overlap.
+		-- The mobile "..." button opens the keyboard. Like the old chat, it still works
+		-- while the ChatWindow is open: the window stays open and the chat icon and
+		-- "..." are both lit (blue) while typing.
 		if Util.IsTouchDevice() and this.ChatBarWidget then
-			if this.Visible then
-				SetVisbility(false)
-			end
-
+			-- With the window open, its own chat bar takes the text; with it closed,
+			-- the keyboard-only input is used.
 			this.ChatBarWidget.MobileFocusOnly =
-				true
+				not this.Visible
 
 			this.ChatBarWidget:FocusChatBar()
 		end
