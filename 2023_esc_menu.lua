@@ -55,7 +55,7 @@ do
 	if Env and Env.Settings2016Trace then
 		pcall(function() if writefile then writefile("Settings2016_trace.txt", "") end end)
 		Env.Settings2016TraceDump = function() return table.concat(TraceBuffer, "\n") end
-		Trace("trace started (menu build 2023-esc-v5.7)")
+		Trace("trace started (menu build 2023-esc-v5.8)")
 	end
 end
 MenuStartTick = tick()
@@ -85,7 +85,7 @@ end
 -- Lets you check which copy of this menu is running: print(getgenv().Settings2016Version)
 pcall(function()
 	local Env = getgenv and getgenv() or nil
-	if Env then Env.Settings2016Version = "2023-esc-v5.7" end
+	if Env then Env.Settings2016Version = "2023-esc-v5.8" end
 end)
 
 -- INVITE FRIENDS ROW TEXT SIZE (applies on every device)
@@ -5766,6 +5766,41 @@ SwitchToPage = function(
 		if ApplyMobileReportLayout then ApplyMobileReportLayout() end
 	end
 
+end
+
+-- The 2017 menu moves every page with TweenPosition, Quad, 0.1 s: the page coming in eases In,
+-- the one going away eases Out (SettingsPageFactory Display / Hide). The tabs above already
+-- slide that way; the Reset / Leave confirmation used to pop up in one frame instead.
+-- Call after the layout is done: Frame slides into the place it was just given, from the
+-- right (Direction 1, opening Reset / Leave) or the left (-1, going back). OutFrame, when
+-- given, comes back for the slide and leaves the other way.
+PAGE_SLIDE_TIME = 0.1
+
+SlidePageIn = function(Frame, Direction, OutFrame)
+	if not Frame or not Frame.Visible or not Hub.Visible then
+		return
+	end
+
+	local Width = Hub.PageClipper.AbsoluteSize.X
+	if Width <= 0 then
+		Width = 800
+	end
+
+	local Goal = Frame.Position
+	Frame.Position = Goal + UDim2.new(0, Direction * Width, 0, 0)
+	TweenTo(Frame, Goal, Enum.EasingDirection.In, Enum.EasingStyle.Quad, PAGE_SLIDE_TIME)
+
+	if OutFrame and OutFrame ~= Frame and OutFrame.Parent == Hub.PageView then
+		OutFrame.Position = UDim2.new(0, 0, 0, 0)
+		OutFrame.Visible = true
+		TweenTo(OutFrame, UDim2.new(0, -Direction * Width, 0, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, PAGE_SLIDE_TIME)
+		task.delay(PAGE_SLIDE_TIME + 0.02, function()
+			-- like the tab slide: hide it afterwards unless it was opened again meanwhile
+			if not (Hub.CurrentPage and Hub.CurrentPage.Frame == OutFrame) then
+				OutFrame.Visible = false
+			end
+		end)
+	end
 end
 
 AddPage = function(
@@ -17471,7 +17506,7 @@ ResetButton, ResetButtonLabel =
 		"Reset",
 		UDim2.new(0, 200, 0, 50),
 		ResetCharacter,
-		not IsMobile -- on a touch screen it is gray like "Don't Reset" and blue only while pressed
+		true
 	)
 ResetButton.Parent = ResetPage.Frame
 ApplyResetButtonAvailability()
@@ -17491,6 +17526,7 @@ DontResetButton =
 			end
 			SwitchToPage(Hub.MenuStack[#Hub.MenuStack] or GamePage, true, true)
 			ResizeHub()
+			SlidePageIn(Hub.CurrentPage and Hub.CurrentPage.Frame, -1, ResetPage.Frame)
 		end
 	)
 DontResetButton.Parent = ResetPage.Frame
@@ -17506,7 +17542,7 @@ LeaveMessage = MakeText(
 )
 LeaveMessage.TextSize = 36
 
-LeaveButton = MakeStyledButton("LeaveGame", "Leave", UDim2.new(0, 200, 0, 50), LeaveGame, not IsMobile)
+LeaveButton = MakeStyledButton("LeaveGame", "Leave", UDim2.new(0, 200, 0, 50), LeaveGame, true)
 LeaveButton.Parent = LeavePage.Frame
 
 DontLeaveButton = MakeStyledButton(
@@ -17521,6 +17557,7 @@ DontLeaveButton = MakeStyledButton(
 		if HomeButton then HomeButton.Visible = HomeButtonEnabled and not IsMobile end
 		SwitchToPage(Hub.MenuStack[#Hub.MenuStack] or GamePage, true, true)
 		ResizeHub()
+		SlidePageIn(Hub.CurrentPage and Hub.CurrentPage.Frame, -1, LeavePage.Frame)
 	end
 )
 DontLeaveButton.Parent = LeavePage.Frame
@@ -17737,6 +17774,7 @@ PushPage =
 			else
 				PositionDesktopConfirmationButtons()
 			end
+			SlidePageIn(Page.Frame, 1)
 		end
 	end
 
@@ -19644,6 +19682,7 @@ EscapeAction =
 		end
 
 		if Hub.Visible and Hub.InConfirmation and (Hub.CurrentPage == ResetPage or Hub.CurrentPage == LeavePage) then
+			local ConfirmationFrame = Hub.CurrentPage.Frame
 			Hub.InConfirmation = false
 			Hub.HubBar.Visible = true
 			Hub.PageClipper.Visible = true
@@ -19653,6 +19692,7 @@ EscapeAction =
 			SwitchToPage(Previous, true, true)
 			Hub.PageView.ScrollBarThickness = IsMobile and 0 or 12
 			ResizeHub()
+			SlidePageIn(Hub.CurrentPage and Hub.CurrentPage.Frame, -1, ConfirmationFrame)
 			return Enum.ContextActionResult.Sink
 		end
 
@@ -19991,4 +20031,4 @@ end
 Api.Instance = Hub
 getgenv().Settings2016 = Api
 return Api
--- end of 2023_esc_menu.lua (2023-esc-v5.7)
+-- end of 2023_esc_menu.lua (2023-esc-v5.8)

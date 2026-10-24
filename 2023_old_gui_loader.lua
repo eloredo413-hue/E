@@ -263,10 +263,10 @@ local scriptToRun = diagnosticsHeader .. [=[
     -- Several tries (a changing query string stops GitHub's cache serving an older copy for a
     -- few minutes), the download is checked (build number, complete file), and the original
     -- menu is only used if USE_ORIGINAL_MENU_IF_NO_FIX is on.
-    local MENU_URL = "https://raw.githubusercontent.com/eloredo413-hue/E/ccr-f33d83ed-bgaekc/2023_esc_menu.lua"
+    local MENU_URL = "https://raw.githubusercontent.com/eloredo413-hue/E/ccr-36205392-d1pxs7/2023_esc_menu.lua"
     local ORIGINAL_MENU_URL = "https://raw.githubusercontent.com/letsafe/something/refs/heads/main/2023escmenuv3.lua"
-    local EXPECTED_BUILD = 5007 -- 2023-esc-v5.7
-    local EXPECTED_NAME = "v5.7"
+    local EXPECTED_BUILD = 5008 -- 2023-esc-v5.8
+    local EXPECTED_NAME = "v5.8"
 
     local function buildOf(source)
         local tag = source:match('Settings2016Version%s*=%s*"([^"]+)"')
